@@ -226,14 +226,14 @@ def test_visit_propose_sends_gupshup_and_persists_provider_result(client, monkey
     assert payload["message_id"] == "msg-propose-1"
     assert payload["send_ok"] is True
     assert payload["provider"] == "gupshup"
-    assert payload["provider_status"] == "sent"
+    assert payload["provider_status"] == "submitted"
     assert payload["provider_message_id"] == "gs-propose-123"
     assert payload["provider_error"] is None
 
     assert state["provider_columns_ensured"] == 1
     assert len(state["provider_updates"]) == 1
     assert state["provider_updates"][0]["message_id"] == "msg-propose-1"
-    assert state["provider_updates"][0]["provider_status"] == "sent"
+    assert state["provider_updates"][0]["provider_status"] == "submitted"
     assert state["provider_updates"][0]["provider_message_id"] == "gs-propose-123"
 
 

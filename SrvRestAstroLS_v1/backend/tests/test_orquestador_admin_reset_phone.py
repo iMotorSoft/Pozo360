@@ -146,6 +146,7 @@ def test_admin_reset_phone_deletes_orquestador_data(client, monkeypatch) -> None
             "messages": before["messages"],
             "tickets": 1,
             "conversations": 1,
+            "visit_followup_cycle": 0,
             "leads": 1,
         }
 
@@ -161,3 +162,20 @@ def test_admin_reset_phone_deletes_orquestador_data(client, monkeypatch) -> None
         }
     finally:
         _cleanup_phone(phone)
+
+
+def test_admin_reset_phone_stays_blocked_outside_dev(client, monkeypatch) -> None:
+    monkeypatch.setenv("VERTICE360_ENV", "prod")
+    monkeypatch.setenv("V360_ADMIN_TOKEN", "test")
+    monkeypatch.setattr(globalVar, "ENVIRONMENT", "prod", raising=False)
+    monkeypatch.setattr(globalVar, "RUN_ENV", "prod", raising=False)
+    monkeypatch.setattr(globalVar, "V360_ADMIN_TOKEN", "test", raising=False)
+
+    response = client.post(
+        "/api/demo/vertice360-orquestador/admin/reset_phone",
+        json={"phone": "+5491111111111"},
+        headers={"x-v360-admin-token": "test"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "admin reset is only available in dev"

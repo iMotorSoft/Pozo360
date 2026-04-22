@@ -6,7 +6,7 @@ import logging
 import re
 import unicodedata
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -378,6 +378,25 @@ GENERIC_OVERVIEW_TERMS = {
 }
 
 
+RESET_RUNTIME_ALL_CONFIRM = "RESET_RUNTIME_ONLY"
+
+FOLLOWUP_TEMPLATE_ALLOWED_PLACEHOLDERS = {
+    "lead_name_or_phone",
+    "project",
+    "ticket_id",
+    "board_url",
+}
+
+FOLLOWUP_LEVEL1_DEFAULT_TEMPLATE = (
+    "Tenés una cita pendiente sin responder para {lead_name_or_phone} en {project}. "
+    "Ticket {ticket_id}."
+)
+FOLLOWUP_LEVEL2_DEFAULT_TEMPLATE = (
+    "Escalamiento: la cita pendiente de {lead_name_or_phone} en {project} superó el tiempo de respuesta. "
+    "Ticket {ticket_id}."
+)
+
+
 def demo_db_ready() -> bool:
     return db.can_connect()
 
@@ -430,6 +449,127 @@ def _normalize_source(source: str | None) -> str:
 def _normalize_snippet(text: str, limit: int = 160) -> str:
     compact = " ".join(str(text or "").split())
     return compact[:limit]
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    clean = str(value or "").strip()
+    return clean or None
+
+
+def _normalize_followup_phone(
+    value: Any,
+    *,
+    field_name: str,
+    required: bool,
+) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        if required:
+            raise ValueError(f"{field_name} is required when enabled=true")
+        return None
+    normalized = globalVar.normalize_phone_e164(raw)
+    if not normalized:
+        raise ValueError(f"{field_name} is invalid")
+    return normalized
+
+
+def _validate_positive_delay(value: Any, *, field_name: str) -> int:
+    try:
+        clean = int(value)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if clean <= 0:
+        raise ValueError(f"{field_name} must be > 0")
+    return clean
+
+
+def _validate_followup_template(value: Any, *, field_name: str) -> str | None:
+    clean = _clean_optional_text(value)
+    if clean is None:
+        return None
+    placeholders = set(re.findall(r"\{([^{}]+)\}", clean))
+    invalid = sorted(name for name in placeholders if name not in FOLLOWUP_TEMPLATE_ALLOWED_PLACEHOLDERS)
+    if invalid:
+        allowed = ", ".join(f"{{{name}}}" for name in sorted(FOLLOWUP_TEMPLATE_ALLOWED_PLACEHOLDERS))
+        invalid_text = ", ".join(f"{{{name}}}" for name in invalid)
+        raise ValueError(f"{field_name} contains invalid placeholders: {invalid_text}. Allowed: {allowed}")
+    return clean
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _build_followup_board_url(phone_e164: str | None, board_base_url: str | None) -> str:
+    clean_phone = str(phone_e164 or '').strip()
+    custom_base = str(board_base_url or '').strip()
+    if not custom_base:
+        return build_board_url(clean_phone) if clean_phone else ''
+    digits = ''.join(ch for ch in clean_phone if ch.isdigit())
+    if not digits:
+        return custom_base
+    if '?' in custom_base:
+        separator = '&' if not custom_base.endswith(('?', '&')) else ''
+    else:
+        separator = '?' if not custom_base.endswith('?') else ''
+    return f"{custom_base}{separator}cliente={digits}"
+
+
+def _followup_project_label(context: dict[str, Any]) -> str:
+    project_code = str(context.get('project_code') or '').strip()
+    if project_code:
+        return project_code
+    project_name = str(context.get('project_name') or '').strip()
+    if project_name:
+        return project_name
+    return 'Sin proyecto'
+
+
+def _followup_lead_label(context: dict[str, Any]) -> str:
+    lead_name = str(context.get('lead_name') or '').strip()
+    if lead_name:
+        return lead_name
+    lead_phone = str(context.get('lead_phone') or context.get('phone_e164') or '').strip()
+    if lead_phone:
+        return lead_phone
+    return 'lead sin identificar'
+
+
+def _render_followup_message(template: str, *, ticket_id: str, context: dict[str, Any], board_base_url: str | None) -> str:
+    values = {
+        'lead_name_or_phone': _followup_lead_label(context),
+        'project': _followup_project_label(context),
+        'ticket_id': ticket_id,
+        'board_url': _build_followup_board_url(
+            str(context.get('lead_phone') or context.get('phone_e164') or '').strip() or None,
+            board_base_url,
+        ),
+    }
+    return str(template).format_map(values).strip()
+
+
+def _followup_message_for_level(level: int, *, config: dict[str, Any], ticket_id: str, context: dict[str, Any]) -> str:
+    if level == 1:
+        template = str(config.get('level1_template') or FOLLOWUP_LEVEL1_DEFAULT_TEMPLATE)
+    else:
+        template = str(config.get('level2_template') or FOLLOWUP_LEVEL2_DEFAULT_TEMPLATE)
+    return _render_followup_message(
+        template,
+        ticket_id=ticket_id,
+        context=context,
+        board_base_url=str(config.get('board_base_url') or '').strip() or None,
+    )
+
+
+def _followup_recipient_for_level(level: int, config: dict[str, Any]) -> str | None:
+    if level == 1:
+        return str(config.get('advisor_phone') or '').strip() or None
+    return str(config.get('supervisor_phone') or '').strip() or None
+
+
+def _followup_send_action_name(level: int, send_ok: bool) -> str:
+    prefix = 'sent' if send_ok else 'send_failed'
+    return f"{prefix}_level{level}"
 
 
 def _digits_only(value: Any) -> str:
@@ -2180,6 +2320,10 @@ def _semantic_intent_resolver(
     clarification_active = _clarification_context_active(summary_obj, recent_messages)
     pending_offer_type = str(summary_obj.get("pending_offer_type") or "").strip().upper()
     pending_question_type = str(summary_obj.get("pending_question_type") or "").strip().upper()
+    visit_availability_context_active = _visit_availability_context_active(
+        detail=detail,
+        summary=summary_obj,
+    )
     project_comparison_request = _extract_project_comparison_request(text) or {}
     project_metric_followup_request = _extract_project_metric_followup_request(text, summary_obj) or {}
     project_metric_value_request = _extract_project_metric_value_request(
@@ -2210,12 +2354,19 @@ def _semantic_intent_resolver(
     effective_global_scope = bool(explicit_global_scope or inherited_global_scope)
     global_feature_search = bool(_is_global_feature_search_signal(text) or inherited_global_scope)
     feature_query_like = _looks_like_unit_feature_query(text, feature_key)
-    time_preference = _extract_time_preference(text) if pending_question_type == "TIME_PREFERENCE" else None
+    visit_availability = (
+        _extract_visit_availability(
+            text,
+            prefer_bare_manana_as_morning=(pending_question_type == "TIME_PREFERENCE"),
+        )
+        if visit_availability_context_active
+        else None
+    )
     last_rooms_query = _last_rooms_query(summary_obj)
     rooms_count_query = _is_count_units_by_rooms_query(text)
     rooms_list_query = _is_list_units_by_rooms_query(text)
 
-    if time_preference:
+    if visit_availability:
         return {
             "intent": "TIME_PREFERENCE",
             "confidence": 0.98,
@@ -2224,8 +2375,16 @@ def _semantic_intent_resolver(
             "chosen_project": None,
             "excluded_project_codes": [],
             "followup": True,
-            "reason": "pending_time_preference",
-            "time_preference": time_preference,
+            "reason": (
+                "pending_time_preference"
+                if pending_question_type == "TIME_PREFERENCE"
+                else "visit_time_preference_followup"
+            ),
+            "time_preference": visit_availability.get("time_preference"),
+            "day_preference": visit_availability.get("day_preference"),
+            "date_hint": visit_availability.get("date_hint"),
+            "time_hint": visit_availability.get("time_hint"),
+            "availability_flexibility": visit_availability.get("availability_flexibility"),
         }
 
     if _is_affirm_message(text):
@@ -2428,6 +2587,19 @@ def _semantic_intent_resolver(
                 "search_scope": "global",
                 "surface_filter": surface_payload,
             }
+
+    if (chosen_project_code or selected_project_code) and _is_project_options_followup_request(text, summary_obj):
+        return {
+            "intent": "PROJECT_OPTIONS",
+            "confidence": 0.95,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "chosen_project": chosen_project_code or selected_project_code,
+            "excluded_project_codes": [],
+            "followup": True,
+            "reason": "semantic_project_options_followup",
+            "resolution_source": "semantic",
+        }
 
     if _is_projects_matching_active_filter_question(text, summary_obj):
         return {
@@ -2734,15 +2906,16 @@ def _semantic_intent_resolver(
                 "reason": "clarify_followup_human_contact",
             }
         if _is_ambiguous_meeting_request(text) or _is_visit_request_intent(text):
+            visit_target_project = chosen_project_code or selected_project_code
             return {
-                "intent": "VISIT_REQUEST",
+                "intent": "VISIT_REQUEST" if visit_target_project else "ASK_PROJECT_FOR_VISIT",
                 "confidence": 0.94,
                 "needs_clarification": False,
                 "clarification_question": None,
-                "chosen_project": chosen_project_code,
+                "chosen_project": visit_target_project,
                 "excluded_project_codes": [],
                 "followup": True,
-                "reason": "clarify_followup_visit_request",
+                "reason": "clarify_followup_visit_request" if visit_target_project else "clarify_followup_visit_project_required",
             }
 
     if _is_human_contact_request(text):
@@ -2772,15 +2945,16 @@ def _semantic_intent_resolver(
         }
 
     if _is_visit_request_intent(text):
+        visit_target_project = chosen_project_code or selected_project_code
         return {
-            "intent": "VISIT_REQUEST",
+            "intent": "VISIT_REQUEST" if visit_target_project else "ASK_PROJECT_FOR_VISIT",
             "confidence": 0.96,
             "needs_clarification": False,
             "clarification_question": None,
-            "chosen_project": chosen_project_code,
+            "chosen_project": visit_target_project,
             "excluded_project_codes": [],
             "followup": False,
-            "reason": "semantic_visit_request",
+            "reason": "semantic_visit_request" if visit_target_project else "semantic_visit_project_required",
         }
 
     fuzzy_intent, fuzzy_score, fuzzy_alias = _fuzzy_basic_intent(
@@ -2925,10 +3099,32 @@ def _build_vera_contact_clarification_reply() -> str:
     return "Claro. ¿Querés coordinar una visita al proyecto o preferís que un asesor te contacte primero?"
 
 
-def _build_vera_visit_requested_reply() -> str:
+def _build_vera_visit_project_selection_reply() -> str:
+    return "Claro. ¿Para cuál proyecto querés coordinar la visita: Bulnes 966, GDR 3760 o Manzanares 3277?"
+
+
+def _build_vera_visit_requested_reply(project_name: str | None = None) -> str:
+    project_fragment = f" para {project_name}" if str(project_name or "").strip() else ""
     return (
-        "Sí, claro 🙂. Ya lo dejo en 'Pendiente de visita' para que un asesor te proponga un horario por este chat. "
+        f"Sí, claro 🙂. Ya dejo la solicitud de visita{project_fragment} en 'Pendiente de visita' para que un asesor te proponga un horario por este chat. "
         "¿Preferís por la mañana o por la tarde?"
+    )
+
+
+def _build_vera_existing_visit_reply(
+    project_name: str | None = None,
+    *,
+    has_availability: bool,
+) -> str:
+    target = str(project_name or "este proyecto").strip() or "este proyecto"
+    if has_availability:
+        return (
+            f"Perfecto. Ya tengo abierta la solicitud de visita para {target}. "
+            "Si querés, actualizo la preferencia horaria."
+        )
+    return (
+        f"Perfecto. Ya tengo abierta la solicitud de visita para {target}. "
+        "Decime si preferís por la mañana o por la tarde."
     )
 
 
@@ -2990,6 +3186,51 @@ def _clear_pending_question_patch() -> dict[str, Any]:
     }
 
 
+def _clear_visit_availability_patch() -> dict[str, Any]:
+    return {
+        "time_preference": None,
+        "day_preference": None,
+        "date_hint": None,
+        "time_hint": None,
+        "availability_flexibility": None,
+    }
+
+
+def _active_visit_from_summary(summary: dict[str, Any] | None) -> dict[str, Any]:
+    summary_obj = summary if isinstance(summary, dict) else {}
+    return {
+        "project_code": str(summary_obj.get("active_visit_project_code") or "").strip().upper() or None,
+        "project_name": str(summary_obj.get("active_visit_project_name") or "").strip() or None,
+        "request_open": bool(summary_obj.get("visit_request_open")),
+    }
+
+
+def _visit_has_structured_availability(summary: dict[str, Any] | None) -> bool:
+    summary_obj = summary if isinstance(summary, dict) else {}
+    for key in ("time_preference", "day_preference", "date_hint", "time_hint", "availability_flexibility"):
+        value = summary_obj.get(key)
+        if value not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _build_active_visit_patch(
+    *,
+    project_code: str | None,
+    project_name: str | None,
+    request_open: bool = True,
+    reset_availability: bool = False,
+) -> dict[str, Any]:
+    patch = {
+        "active_visit_project_code": str(project_code or "").strip().upper() or None,
+        "active_visit_project_name": str(project_name or "").strip() or None,
+        "visit_request_open": bool(request_open),
+    }
+    if reset_availability:
+        patch.update(_clear_visit_availability_patch())
+    return patch
+
+
 def _build_pending_question_patch(
     *,
     question_type: str,
@@ -2999,6 +3240,39 @@ def _build_pending_question_patch(
         "pending_question_type": str(question_type or "").strip().upper() or None,
         "pending_question_payload": _jsonable(payload or {}),
     }
+
+
+def _visit_availability_context_active(
+    *,
+    detail: dict[str, Any] | None,
+    summary: dict[str, Any] | None,
+) -> bool:
+    summary_obj = summary if isinstance(summary, dict) else {}
+    selected_project = _ticket_selected_project(detail)
+    selected_project_code = str(selected_project.get("code") or "").strip().upper()
+    active_visit = _active_visit_from_summary(summary_obj)
+    pending_question_type = str(summary_obj.get("pending_question_type") or "").strip().upper()
+    if pending_question_type == "TIME_PREFERENCE":
+        active_project_code = str(active_visit.get("project_code") or "").strip().upper()
+        return not selected_project_code or not active_project_code or active_project_code == selected_project_code
+
+    if not active_visit.get("request_open") or not selected_project_code:
+        return False
+
+    stage = str((detail or {}).get("stage") or "").strip()
+    if stage not in {STAGE_PENDING_VISIT, STAGE_WAITING_CONFIRMATION, STAGE_VISIT_CONFIRMED}:
+        return False
+
+    return str(active_visit.get("project_code") or "").strip().upper() == selected_project_code
+
+
+def _looks_like_explicit_light_orientation_query(text: str) -> bool:
+    clean = _normalize_text(text)
+    if not clean:
+        return False
+    if "como da" in clean:
+        return True
+    return bool(re.search(r"\b(sol|luz|luminos[oa]|orientacion|ventilacion|exposicion)\b", clean))
 
 
 def _pending_offer_from_summary(summary: dict[str, Any] | None) -> dict[str, Any]:
@@ -3039,36 +3313,303 @@ def _build_pending_offer_patch(
     }
 
 
-def _extract_time_preference(text: str) -> str | None:
+def _extract_time_preference(
+    text: str,
+    *,
+    prefer_bare_manana_as_morning: bool = False,
+) -> str | None:
     clean = _normalize_text(text)
     if not clean:
         return None
-    if re.fullmatch(r"(por\s+la\s+)?manana", clean):
+    if prefer_bare_manana_as_morning and re.fullmatch(r"manana", clean):
         return "morning"
-    if re.fullmatch(r"(por\s+la\s+)?tarde", clean):
+    if re.search(r"\b(?:(?:a|por)\s+la|la)\s+manana\b", clean):
+        return "morning"
+    if re.search(r"\b(?:(?:a|por)\s+la|la)\s+tarde\b", clean) or re.fullmatch(r"tarde", clean):
         return "afternoon"
-    any_patterns = (
-        r"es\s+igual",
-        r"igual",
-        r"cualquier",
-        r"cualquiera",
-        r"me\s+da\s+igual",
-        r"indistinto",
-        r"indistinta",
-        r"cualquier\s+franja",
-        r"cualquier\s+horario",
-    )
-    if any(re.fullmatch(pattern, clean) for pattern in any_patterns):
-        return "any"
+    if re.search(r"\b(?:(?:a|por)\s+la)\s+noche\b", clean) or re.fullmatch(r"noche", clean):
+        return "night"
     return None
 
 
-def _build_vera_time_preference_reply(preference: str) -> str:
-    if preference == "morning":
-        return "Perfecto, lo dejo indicado para que el asesor te proponga un horario por la mañana."
-    if preference == "afternoon":
-        return "Perfecto, lo dejo indicado para que el asesor te proponga un horario por la tarde."
-    return "Perfecto, lo dejo abierto para cualquier franja y un asesor te escribe por acá."
+def _extract_visit_day_preference(text: str) -> str | None:
+    clean = _normalize_text(text)
+    weekday_patterns = (
+        ("monday", r"lunes"),
+        ("tuesday", r"martes"),
+        ("wednesday", r"miercoles"),
+        ("thursday", r"jueves"),
+        ("friday", r"viernes"),
+        ("saturday", r"sabado"),
+        ("sunday", r"domingo"),
+    )
+    for value, pattern in weekday_patterns:
+        if re.search(fr"\b{pattern}\b", clean):
+            return value
+    return None
+
+
+def _extract_visit_date_hint(text: str, *, time_preference: str | None = None) -> str | None:
+    clean = _normalize_text(text)
+    if re.search(r"\bpasado\s+manana\b", clean):
+        return "day_after_tomorrow"
+    if re.search(r"\b(?:la\s+)?semana\s+que\s+viene\b|\bproxima\s+semana\b", clean):
+        return "next_week"
+    if re.search(r"\besta\s+semana\b", clean):
+        return "this_week"
+    if re.search(r"\bhoy\b", clean):
+        return "today"
+    if time_preference != "morning" and re.search(r"\bmanana\b", clean):
+        return "tomorrow"
+    return None
+
+
+def _format_visit_time_label(hour: int, minute: int | None = None) -> str | None:
+    if hour < 0 or hour > 23:
+        return None
+    minute_value = 0 if minute is None else int(minute)
+    if minute_value < 0 or minute_value > 59:
+        return None
+    if minute_value == 0:
+        return f"{hour} hs"
+    return f"{hour}:{minute_value:02d} hs"
+
+
+def _extract_visit_time_hint(text: str) -> str | None:
+    clean = _normalize_text(text)
+    if not clean:
+        return None
+
+    patterns = (
+        (r"\bdespues\s+de\s+las?\s+(\d{1,2})(?:(?::|\.)\s*(\d{2}))?\b", "after"),
+        (r"\ba\s+partir\s+de\s+las?\s+(\d{1,2})(?:(?::|\.)\s*(\d{2}))?\b", "from"),
+        (r"\btipo\s+(\d{1,2})(?:(?::|\.)\s*(\d{2}))?\s*(?:hs|hora|horas)?\b", "around"),
+    )
+    for pattern_text, kind in patterns:
+        match = re.search(pattern_text, clean)
+        if not match:
+            continue
+        label = _format_visit_time_label(int(match.group(1)), int(match.group(2)) if match.group(2) else None)
+        if not label:
+            return None
+        if kind == "after":
+            return f"después de las {label}"
+        if kind == "from":
+            return f"a partir de las {label}"
+        return f"tipo {label}"
+
+    exact = re.fullmatch(r"(\d{1,2})(?:(?::|\.)\s*(\d{2}))?\s*(?:hs|hora|horas)?", clean)
+    if exact:
+        return _format_visit_time_label(int(exact.group(1)), int(exact.group(2)) if exact.group(2) else None)
+    return None
+
+
+def _extract_visit_availability_flexibility(text: str) -> str | None:
+    clean = _normalize_text(text)
+    any_patterns = (
+        r"es\s+igual",
+        r"igual",
+        r"cualquiera",
+        r"cualquier\s+dia",
+        r"cualquier\s+franja",
+        r"cualquier\s+horario",
+        r"cualquier\s+momento",
+        r"en\s+cualquier\s+momento",
+        r"visitar\s+en\s+cualquier\s+momento",
+        r"todo\s+disponible",
+        r"todo\s+horario",
+        r"todo\s+el\s+horario",
+        r"disponible\s+todo\s+horario",
+        r"me\s+da\s+igual",
+        r"indistinto",
+        r"indistinta",
+    )
+    if any(re.fullmatch(pattern, clean) for pattern in any_patterns):
+        return "any"
+
+    flexible_patterns = (
+        r"me\s+adapto",
+        r"cuando\s+pueda\s+el\s+asesor",
+        r"cuando\s+pueda",
+    )
+    if any(re.fullmatch(pattern, clean) for pattern in flexible_patterns):
+        return "flexible"
+    return None
+
+
+def _extract_visit_availability(
+    text: str,
+    *,
+    prefer_bare_manana_as_morning: bool = False,
+) -> dict[str, Any] | None:
+    clean = _normalize_text(text)
+    if not clean or _looks_like_explicit_light_orientation_query(text):
+        return None
+
+    flexibility = _extract_visit_availability_flexibility(text)
+    if flexibility == "any":
+        return {
+            "time_preference": "any",
+            "day_preference": None,
+            "date_hint": None,
+            "time_hint": None,
+            "availability_flexibility": "any",
+        }
+    if flexibility == "flexible":
+        return {
+            "time_preference": None,
+            "day_preference": None,
+            "date_hint": None,
+            "time_hint": None,
+            "availability_flexibility": "flexible",
+        }
+
+    time_preference = _extract_time_preference(
+        text,
+        prefer_bare_manana_as_morning=prefer_bare_manana_as_morning,
+    )
+    availability = {
+        "time_preference": time_preference,
+        "day_preference": _extract_visit_day_preference(text),
+        "date_hint": _extract_visit_date_hint(text, time_preference=time_preference),
+        "time_hint": _extract_visit_time_hint(text),
+        "availability_flexibility": None,
+    }
+    if not any(availability.values()):
+        return None
+    return availability
+
+
+def _merge_visit_availability(
+    summary: dict[str, Any] | None,
+    availability: dict[str, Any] | None,
+) -> dict[str, Any]:
+    summary_obj = summary if isinstance(summary, dict) else {}
+    merged = {
+        "time_preference": str(summary_obj.get("time_preference") or "").strip().lower() or None,
+        "day_preference": str(summary_obj.get("day_preference") or "").strip().lower() or None,
+        "date_hint": str(summary_obj.get("date_hint") or "").strip().lower() or None,
+        "time_hint": str(summary_obj.get("time_hint") or "").strip() or None,
+        "availability_flexibility": str(summary_obj.get("availability_flexibility") or "").strip().lower() or None,
+    }
+    incoming = availability if isinstance(availability, dict) else {}
+    if not incoming:
+        return merged
+
+    flexibility = str(incoming.get("availability_flexibility") or "").strip().lower() or None
+    if flexibility == "any":
+        return {
+            "time_preference": "any",
+            "day_preference": None,
+            "date_hint": None,
+            "time_hint": None,
+            "availability_flexibility": "any",
+        }
+    if flexibility == "flexible":
+        return {
+            "time_preference": None,
+            "day_preference": None,
+            "date_hint": None,
+            "time_hint": None,
+            "availability_flexibility": "flexible",
+        }
+
+    merged["availability_flexibility"] = None
+
+    day_preference = str(incoming.get("day_preference") or "").strip().lower() or None
+    date_hint = str(incoming.get("date_hint") or "").strip().lower() or None
+    time_preference = str(incoming.get("time_preference") or "").strip().lower() or None
+    time_hint = str(incoming.get("time_hint") or "").strip() or None
+
+    if day_preference:
+        merged["day_preference"] = day_preference
+        merged["date_hint"] = None
+    if date_hint:
+        merged["date_hint"] = date_hint
+        merged["day_preference"] = None
+    if time_hint:
+        merged["time_hint"] = time_hint
+        if not time_preference:
+            merged["time_preference"] = None
+    if time_preference:
+        merged["time_preference"] = time_preference
+        if time_preference != "any" and not time_hint:
+            merged["time_hint"] = None
+
+    return merged
+
+
+def _visit_day_label(day_preference: str | None, *, combined: bool) -> str | None:
+    labels = {
+        "monday": "lunes",
+        "tuesday": "martes",
+        "wednesday": "miércoles",
+        "thursday": "jueves",
+        "friday": "viernes",
+        "saturday": "sábado",
+        "sunday": "domingo",
+    }
+    label = labels.get(str(day_preference or "").strip().lower())
+    if not label:
+        return None
+    if combined:
+        return label
+    return f"el {label}"
+
+
+def _visit_date_hint_label(date_hint: str | None) -> str | None:
+    labels = {
+        "today": "hoy",
+        "tomorrow": "mañana",
+        "day_after_tomorrow": "pasado mañana",
+        "this_week": "esta semana",
+        "next_week": "la semana que viene",
+    }
+    return labels.get(str(date_hint or "").strip().lower())
+
+
+def _visit_time_preference_label(time_preference: str | None) -> str | None:
+    value = str(time_preference or "").strip().lower()
+    if value == "morning":
+        return "por la mañana"
+    if value == "afternoon":
+        return "por la tarde"
+    if value == "night":
+        return "a la noche"
+    return None
+
+
+def _build_vera_visit_availability_reply(availability: dict[str, Any]) -> str:
+    flexibility = str(availability.get("availability_flexibility") or "").strip().lower()
+    if flexibility == "any" or str(availability.get("time_preference") or "").strip().lower() == "any":
+        return "Perfecto. Lo dejo sin restricción de horario para que el asesor te proponga opciones."
+    if flexibility == "flexible":
+        return "Perfecto. Lo dejo flexible para que el asesor te proponga opciones."
+
+    day_label = _visit_day_label(str(availability.get("day_preference") or "").strip(), combined=False)
+    combined_day_label = _visit_day_label(str(availability.get("day_preference") or "").strip(), combined=True)
+    date_label = _visit_date_hint_label(str(availability.get("date_hint") or "").strip())
+    time_hint = str(availability.get("time_hint") or "").strip()
+    time_label = _visit_time_preference_label(str(availability.get("time_preference") or "").strip())
+    primary_day = combined_day_label or date_label
+
+    if primary_day and time_hint:
+        return f"Perfecto. Lo dejo para {primary_day} {time_hint}."
+    if primary_day and time_label:
+        return f"Perfecto. Lo dejo para {primary_day} {time_label}."
+    if day_label:
+        return f"Perfecto. Lo dejo para {day_label}."
+    if date_label:
+        return f"Perfecto. Lo dejo para {date_label}."
+    if time_hint:
+        return f"Perfecto. Anoto {time_hint} para la visita."
+    if str(availability.get("time_preference") or "").strip().lower() == "morning":
+        return "Perfecto. Dejo preferencia de mañana para que el asesor te proponga horario por este chat."
+    if str(availability.get("time_preference") or "").strip().lower() == "afternoon":
+        return "Perfecto. Dejo preferencia de tarde para que el asesor te proponga horario por este chat."
+    if str(availability.get("time_preference") or "").strip().lower() == "night":
+        return "Perfecto. Dejo preferencia de noche para que el asesor te proponga horario por este chat."
+    return "Perfecto. Lo dejo indicado para la visita y el asesor te escribe por este chat."
 
 
 def _feature_values_from_unit(unit_row: dict[str, Any]) -> list[str]:
@@ -4324,6 +4865,25 @@ def _search_units_by_feature(
     return enriched_rows
 
 
+def _is_project_options_followup_request(text: str, summary: dict[str, Any] | None) -> bool:
+    clean = _normalize_text(text)
+    if not clean:
+        return False
+    summary_obj = summary if isinstance(summary, dict) else {}
+    last_intent = str(summary_obj.get("last_intent") or "").strip().upper()
+    if last_intent not in {"PRICE", "AVAILABLE_UNITS", "UNIT_TYPES", "PROJECT_OPTIONS"}:
+        return False
+    active_filter = _last_active_filter(summary_obj)
+    if str(active_filter.get("scope") or summary_obj.get("last_search_scope") or "project").strip().lower() == "global":
+        return False
+    if clean in {"opciones", "las opciones", "mostrame opciones", "mostrame las opciones", "opciones puntuales", "las opciones puntuales"}:
+        return True
+    return bool(
+        re.search(r"\bopciones?\b", clean)
+        and re.search(r"\b(puntuales?|puntual|mostrame|pasame|mostrar|ver)\b", clean)
+    )
+
+
 def _followup_intent_from_summary(
     text: str,
     summary: dict[str, Any] | None,
@@ -5091,6 +5651,10 @@ def _resolve_project_knowledge_reply(
     result_set_sort = semantic.get("result_set_sort") if isinstance(semantic.get("result_set_sort"), dict) else {}
     result_set_extreme = semantic.get("result_set_extreme") if isinstance(semantic.get("result_set_extreme"), dict) else {}
     time_preference = str(semantic.get("time_preference") or "").strip().lower()
+    day_preference = str(semantic.get("day_preference") or "").strip().lower()
+    date_hint = str(semantic.get("date_hint") or "").strip().lower()
+    time_hint = str(semantic.get("time_hint") or "").strip()
+    availability_flexibility = str(semantic.get("availability_flexibility") or "").strip().lower()
     excluded_project_codes = [
         str(code or "").strip().upper()
         for code in (semantic.get("excluded_project_codes") or [])
@@ -5131,6 +5695,11 @@ def _resolve_project_knowledge_reply(
                 "code": project_code,
                 "name": project_name,
             }
+
+    if pending_question.get("type") == "VISIT_PROJECT_SELECTION" and chosen_project_code and project_code:
+        intent = "VISIT_REQUEST"
+        is_followup = True
+        intent_reason = "visit_project_selection_followup"
 
     if intent == "AFFIRM":
         pending_type = str(pending_offer.get("type") or "").strip().upper()
@@ -5245,26 +5814,43 @@ def _resolve_project_knowledge_reply(
             "result_slots": {},
         }
 
-    if intent == "TIME_PREFERENCE" and str(pending_question.get("type") or "").strip().upper() == "TIME_PREFERENCE":
+    if intent == "TIME_PREFERENCE":
+        merged_visit_availability = _merge_visit_availability(
+            summary_obj,
+            {
+                "time_preference": time_preference or None,
+                "day_preference": day_preference or None,
+                "date_hint": date_hint or None,
+                "time_hint": time_hint or None,
+                "availability_flexibility": availability_flexibility or None,
+            },
+        )
         return {
             "variant": "visit_time_preference",
             "intent": intent,
             "followup": True,
             "reason": intent_reason,
-            "answer": _build_vera_time_preference_reply(time_preference or "any"),
+            "answer": _build_vera_visit_availability_reply(merged_visit_availability),
             "found": True,
             "fields_used": [],
             "data_sources": [],
             "slots": slots,
             "summary_patch": {
                 **summary_patch,
-                "time_preference": time_preference or "any",
+                **(
+                    _build_active_visit_patch(
+                        project_code=project_code,
+                        project_name=project_name,
+                        request_open=True,
+                    )
+                    if project_code
+                    else {}
+                ),
+                **merged_visit_availability,
             },
             "project_code": project_code,
             "project_name": project_name,
-            "result_slots": {
-                "time_preference": time_preference or "any",
-            },
+            "result_slots": merged_visit_availability,
         }
 
     if intent == "GLOBAL_PRICE_EXTREME":
@@ -5955,6 +6541,29 @@ def _resolve_project_knowledge_reply(
             "result_slots": {},
         }
 
+    if intent == "ASK_PROJECT_FOR_VISIT":
+        return {
+            "variant": "ask_project_for_visit",
+            "intent": intent,
+            "followup": is_followup,
+            "reason": intent_reason,
+            "answer": _build_vera_visit_project_selection_reply(),
+            "found": True,
+            "fields_used": ["projects.list"],
+            "data_sources": ["projects"],
+            "slots": slots,
+            "summary_patch": {
+                **summary_patch,
+                **_build_pending_question_patch(
+                    question_type="VISIT_PROJECT_SELECTION",
+                    payload={"source_intent": "VISIT_REQUEST"},
+                ),
+            },
+            "project_code": "",
+            "project_name": "",
+            "result_slots": {},
+        }
+
     if intent == "HUMAN_CONTACT_REQUEST":
         return {
             "variant": "human_contact_requested",
@@ -5973,23 +6582,47 @@ def _resolve_project_knowledge_reply(
         }
 
     if intent == "VISIT_REQUEST":
+        active_visit = _active_visit_from_summary(summary_obj)
+        same_project_active_visit = bool(
+            project_code
+            and active_visit.get("request_open")
+            and str(active_visit.get("project_code") or "").strip().upper() == str(project_code or "").strip().upper()
+        )
+        has_existing_visit_availability = same_project_active_visit and _visit_has_structured_availability(summary_obj)
+        visit_summary_patch = {
+            **summary_patch,
+            **_build_active_visit_patch(
+                project_code=project_code,
+                project_name=project_name,
+                request_open=True,
+                reset_availability=not same_project_active_visit,
+            ),
+        }
+        if not has_existing_visit_availability:
+            visit_summary_patch.update(
+                _build_pending_question_patch(
+                    question_type="TIME_PREFERENCE",
+                    payload={"source_intent": intent},
+                )
+            )
         return {
             "variant": "visit_requested",
             "intent": intent,
             "followup": is_followup,
             "reason": intent_reason,
-            "answer": _build_vera_visit_requested_reply(),
+            "answer": (
+                _build_vera_existing_visit_reply(
+                    project_name,
+                    has_availability=has_existing_visit_availability,
+                )
+                if same_project_active_visit
+                else _build_vera_visit_requested_reply(project_name)
+            ),
             "found": True,
             "fields_used": [],
             "data_sources": [],
             "slots": slots,
-            "summary_patch": {
-                **summary_patch,
-                **_build_pending_question_patch(
-                    question_type="TIME_PREFERENCE",
-                    payload={"source_intent": intent},
-                ),
-            },
+            "summary_patch": visit_summary_patch,
             "project_code": project_code,
             "project_name": project_name,
             "result_slots": {},
@@ -6314,6 +6947,55 @@ def _resolve_project_knowledge_reply(
                     "project_name": str(target_row.get("project_name") or "").strip(),
                     "result_slots": {},
                 }
+
+    if intent == "PROJECT_OPTIONS":
+        active_filter_payload = active_filter.get("payload") if isinstance(active_filter.get("payload"), dict) else {}
+        rooms_filter = None
+        if (
+            str(active_filter.get("type") or "").strip().lower() == "rooms"
+            and str(active_filter.get("scope") or "").strip().lower() == "project"
+            and str(active_filter.get("project_code") or "").strip().upper() == str(project_code or "").strip().upper()
+        ):
+            try:
+                rooms_filter = int(active_filter_payload.get("rooms_count")) if active_filter_payload.get("rooms_count") is not None else None
+            except Exception:  # noqa: BLE001
+                rooms_filter = None
+        rows = getattr(repo, "list_demo_units")(conn, project_code, rooms=rooms_filter, currency=None) or []
+        rows = [row for row in rows if _is_available_status(row.get("availability_status"))]
+        preview_rows = rows[:3]
+        intro = f"Hoy tengo estas opciones puntuales en {project_name}:"
+        if rooms_filter is not None:
+            intro = f"Hoy tengo estas opciones puntuales de {_rooms_label_from_count(rooms_filter)} en {project_name}:"
+        if not preview_rows:
+            answer = f"En {project_name} hoy no veo opciones puntuales cargadas."
+        else:
+            answer_lines = [intro]
+            answer_lines.extend(
+                f"- {_format_unit_example(row, include_project=False)}"
+                for row in preview_rows
+                if _format_unit_example(row, include_project=False)
+            )
+            answer = "\n".join(answer_lines)
+        summary_patch["selected_project"] = {
+            "id": None,
+            "code": project_code,
+            "name": project_name,
+        }
+        return {
+            "variant": "project_unit_options",
+            "intent": intent,
+            "followup": True,
+            "reason": intent_reason,
+            "answer": answer,
+            "found": bool(preview_rows),
+            "fields_used": ["demo_units.surface_total_m2", "demo_units.list_price", "demo_units.availability_status"],
+            "data_sources": _dedupe_texts(_source_from_profile_rows(preview_rows), limit=8) or ["demo_units"],
+            "slots": slots,
+            "summary_patch": summary_patch,
+            "project_code": project_code,
+            "project_name": project_name,
+            "result_slots": {"matches_count": len(rows), "rooms_count": rooms_filter},
+        }
 
     if intent in {"PRICE", "AVAILABILITY", "AVAILABLE_UNITS", "SURFACE_QUERY", "UNIT_TYPES"} and unit_code:
         unit_row = _unit_row_for_code(conn, unit_code)
@@ -7205,6 +7887,26 @@ def _provider_response_json(value: Any) -> dict[str, Any]:
     return {"raw": _jsonable(value)}
 
 
+def _provider_response_status(value: Any, *, default: str = "submitted") -> str:
+    payload = _provider_response_json(value)
+    raw_status = payload.get("status")
+    if raw_status is None and isinstance(payload.get("payload"), dict):
+        raw_status = payload["payload"].get("status")
+    clean = str(raw_status or "").strip().lower()
+    return clean or default
+
+
+def _provider_status_is_accepted(provider_status: Any) -> bool:
+    clean = str(provider_status or "").strip().lower()
+    return clean in {"accepted", "queued", "submitted", "sent", "delivered", "read"}
+
+
+def _phones_match(first_phone: str | None, second_phone: str | None) -> bool:
+    first_clean = _normalize_target_phone(first_phone)
+    second_clean = _normalize_target_phone(second_phone)
+    return bool(first_clean and second_clean and first_clean == second_clean)
+
+
 async def _send_supervisor_whatsapp_via_gupshup(phone_e164: str, text: str) -> dict[str, Any]:
     missing = _missing_gupshup_config_keys()
     if missing:
@@ -7220,12 +7922,13 @@ async def _send_supervisor_whatsapp_via_gupshup(phone_e164: str, text: str) -> d
     try:
         ack = await gupshup_send_text(phone_e164, text)
         provider_message_id = str(ack.provider_message_id or "").strip() or None
+        provider_response = _provider_response_json(ack.raw)
         return {
             "send_ok": True,
             "provider": "gupshup",
-            "provider_status": "sent",
+            "provider_status": _provider_response_status(provider_response),
             "provider_message_id": provider_message_id,
-            "provider_response": _provider_response_json(ack.raw),
+            "provider_response": provider_response,
             "error": None,
         }
     except GupshupWhatsAppSendError as exc:
@@ -7402,6 +8105,550 @@ def dashboard(cliente: str | None = None) -> dict[str, Any]:
         }
 
     return _jsonable(db.run_in_transaction(_tx))
+
+
+def set_followup_config(
+    *,
+    cliente: str,
+    enabled: bool,
+    advisor_phone: str | None,
+    supervisor_phone: str | None,
+    first_delay_seconds: int,
+    second_delay_seconds: int,
+    level1_template: str | None = None,
+    level2_template: str | None = None,
+    updated_by: str | None = None,
+    board_base_url: str | None = None,
+    allow_manual_evaluate: bool = True,
+) -> dict[str, Any]:
+    clean_cliente = str(cliente or "").strip()
+    if not clean_cliente:
+        raise ValueError("cliente is required")
+
+    enabled_bool = bool(enabled)
+    clean_first_delay = _validate_positive_delay(
+        first_delay_seconds,
+        field_name="first_delay_seconds",
+    )
+    clean_second_delay = _validate_positive_delay(
+        second_delay_seconds,
+        field_name="second_delay_seconds",
+    )
+    clean_advisor_phone = _normalize_followup_phone(
+        advisor_phone,
+        field_name="advisor_phone",
+        required=enabled_bool,
+    )
+    clean_supervisor_phone = _normalize_followup_phone(
+        supervisor_phone,
+        field_name="supervisor_phone",
+        required=enabled_bool,
+    )
+    clean_level1_template = _validate_followup_template(
+        level1_template,
+        field_name="level1_template",
+    )
+    clean_level2_template = _validate_followup_template(
+        level2_template,
+        field_name="level2_template",
+    )
+    clean_updated_by = _clean_optional_text(updated_by)
+    clean_board_base_url = _clean_optional_text(board_base_url)
+    allow_manual_evaluate_bool = bool(allow_manual_evaluate)
+
+    def _tx(conn: Any) -> dict[str, Any]:
+        return repo.upsert_followup_config(
+            conn,
+            cliente=clean_cliente,
+            enabled=enabled_bool,
+            advisor_phone=clean_advisor_phone,
+            supervisor_phone=clean_supervisor_phone,
+            first_delay_seconds=clean_first_delay,
+            second_delay_seconds=clean_second_delay,
+            level1_template=clean_level1_template,
+            level2_template=clean_level2_template,
+            board_base_url=clean_board_base_url,
+            allow_manual_evaluate=allow_manual_evaluate_bool,
+            updated_by=clean_updated_by,
+        )
+
+    result = db.run_in_transaction(_tx)
+    set_correlation_id(clean_cliente)
+    logger.info(
+        "ORQ_FOLLOWUP_CONFIG_SET cliente=%s enabled=%s advisor=%s supervisor=%s allow_manual_evaluate=%s",
+        clean_cliente,
+        enabled_bool,
+        clean_advisor_phone or "-",
+        clean_supervisor_phone or "-",
+        allow_manual_evaluate_bool,
+    )
+    return _jsonable(result)
+
+
+def get_followup_config(*, cliente: str) -> dict[str, Any]:
+    clean_cliente = str(cliente or "").strip()
+    if not clean_cliente:
+        raise ValueError("cliente is required")
+
+    def _tx(conn: Any) -> dict[str, Any]:
+        row = repo.get_followup_config(conn, clean_cliente)
+        if row is None:
+            raise KeyError("followup config not found")
+        return row
+
+    result = db.run_in_transaction(_tx)
+    set_correlation_id(clean_cliente)
+    logger.info("ORQ_FOLLOWUP_CONFIG_GET cliente=%s found=true", clean_cliente)
+    return _jsonable(result)
+
+
+async def evaluate_followup(*, cliente: str, ticket_id: str | None = None, force_now: bool = False) -> dict[str, Any]:
+    clean_cliente = str(cliente or '').strip()
+    clean_ticket_id = str(ticket_id or '').strip() or None
+    if not clean_cliente:
+        raise ValueError('cliente is required')
+
+    now = _utcnow()
+
+    def _tx_load(conn: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        repo.ensure_visit_followup_config_schema(conn)
+        repo.ensure_visit_followup_cycle_schema(conn)
+        config = repo.get_followup_config(conn, clean_cliente)
+        if config is None:
+            raise KeyError('followup config not found')
+        candidates = repo.list_followup_candidates(conn, clean_cliente, ticket_id=clean_ticket_id)
+        return config, candidates
+
+    config, candidates = db.run_in_transaction(_tx_load)
+
+    if not bool(config.get('enabled')):
+        return _jsonable({
+            'ok': True,
+            'cliente': clean_cliente,
+            'ticket_id': clean_ticket_id,
+            'force_now': bool(force_now),
+            'config_enabled': False,
+            'evaluated_count': 0,
+            'actions': [],
+        })
+
+    if not bool(config.get('allow_manual_evaluate')):
+        return _jsonable({
+            'ok': True,
+            'cliente': clean_cliente,
+            'ticket_id': clean_ticket_id,
+            'force_now': bool(force_now),
+            'config_enabled': True,
+            'allow_manual_evaluate': False,
+            'evaluated_count': 0,
+            'actions': [],
+        })
+
+    actions: list[dict[str, Any]] = []
+
+    for candidate in candidates:
+        ticket_id_value = str(candidate.get('ticket_id') or '').strip()
+        if not ticket_id_value:
+            continue
+
+        def _tx_prepare(conn: Any) -> dict[str, Any]:
+            repo.ensure_visit_followup_cycle_schema(conn)
+            cycle = repo.get_active_followup_cycle(conn, ticket_id_value)
+            status_before = str(cycle.get('status') or '') if cycle else None
+            stage = str(candidate.get('stage') or '').strip()
+            lead_id = str(candidate.get('lead_id') or '').strip() or None
+            started_at = candidate.get('followup_started_at') or now
+
+            if cycle is None and stage == STAGE_PENDING_VISIT:
+                cycle = repo.create_followup_cycle(
+                    conn,
+                    cycle_id=str(uuid.uuid4()),
+                    ticket_id=ticket_id_value,
+                    cliente=clean_cliente,
+                    status='active',
+                    started_at=started_at,
+                    project_code=str(candidate.get('project_code') or '').strip() or None,
+                    lead_phone=str(candidate.get('lead_phone') or '').strip() or None,
+                    advisor_phone=str(config.get('advisor_phone') or '').strip() or None,
+                    supervisor_phone=str(config.get('supervisor_phone') or '').strip() or None,
+                    last_stage_seen=stage or None,
+                    last_evaluated_at=now,
+                )
+                repo.insert_event(
+                    conn,
+                    correlation_id=ticket_id_value,
+                    domain=DOMAIN,
+                    name='visit.followup.cycle.opened',
+                    actor='system',
+                    payload={
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle.get('cycle_id'),
+                        'cliente': clean_cliente,
+                        'started_at': started_at,
+                    },
+                )
+                status_before = None
+
+            if cycle is None:
+                return {
+                    'ticket_id': ticket_id_value,
+                    'cycle_id': None,
+                    'status_before': status_before,
+                    'status_after': None,
+                    'action': 'ignored',
+                    'send_required': False,
+                    'send_ok': None,
+                }
+
+            cycle_id = str(cycle.get('cycle_id'))
+            cycle_started_at = cycle.get('started_at') or started_at or now
+            human_action = repo.detect_last_human_action(
+                conn,
+                ticket_id=ticket_id_value,
+                lead_id=lead_id,
+                since=cycle_started_at,
+                until=now,
+            )
+            if human_action is not None:
+                closed = repo.close_followup_cycle(
+                    conn,
+                    cycle_id,
+                    status='completed',
+                    cancel_reason=str(human_action.get('detail') or 'human_action'),
+                    closed_at=now,
+                    last_human_action_at=human_action.get('created_at'),
+                    last_stage_seen=stage or None,
+                    last_evaluated_at=now,
+                )
+                repo.insert_event(
+                    conn,
+                    correlation_id=ticket_id_value,
+                    domain=DOMAIN,
+                    name='visit.followup.closed',
+                    actor='system',
+                    payload={
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle_id,
+                        'reason': 'human_action',
+                        'human_action': human_action,
+                    },
+                )
+                return {
+                    'ticket_id': ticket_id_value,
+                    'cycle_id': cycle_id,
+                    'status_before': status_before,
+                    'status_after': closed.get('status'),
+                    'action': 'closed_human_action',
+                    'send_required': False,
+                    'send_ok': None,
+                }
+
+            if not stage:
+                closed = repo.close_followup_cycle(
+                    conn,
+                    cycle_id,
+                    status='cancelled',
+                    cancel_reason='ticket_missing',
+                    closed_at=now,
+                    last_stage_seen=None,
+                    last_evaluated_at=now,
+                )
+                repo.insert_event(
+                    conn,
+                    correlation_id=ticket_id_value,
+                    domain=DOMAIN,
+                    name='visit.followup.closed',
+                    actor='system',
+                    payload={
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle_id,
+                        'reason': 'ticket_missing',
+                    },
+                )
+                return {
+                    'ticket_id': ticket_id_value,
+                    'cycle_id': cycle_id,
+                    'status_before': status_before,
+                    'status_after': closed.get('status'),
+                    'action': 'closed_ticket_missing',
+                    'send_required': False,
+                    'send_ok': None,
+                }
+
+            if stage != STAGE_PENDING_VISIT:
+                closed = repo.close_followup_cycle(
+                    conn,
+                    cycle_id,
+                    status='cancelled',
+                    cancel_reason='stage_changed',
+                    closed_at=now,
+                    last_stage_seen=stage,
+                    last_evaluated_at=now,
+                )
+                repo.insert_event(
+                    conn,
+                    correlation_id=ticket_id_value,
+                    domain=DOMAIN,
+                    name='visit.followup.closed',
+                    actor='system',
+                    payload={
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle_id,
+                        'reason': 'stage_changed',
+                        'stage': stage,
+                    },
+                )
+                return {
+                    'ticket_id': ticket_id_value,
+                    'cycle_id': cycle_id,
+                    'status_before': status_before,
+                    'status_after': closed.get('status'),
+                    'action': 'closed_stage_changed',
+                    'send_required': False,
+                    'send_ok': None,
+                }
+
+            context = {
+                'lead_phone': str(candidate.get('lead_phone') or '').strip() or None,
+                'lead_name': str(candidate.get('lead_name') or '').strip() or None,
+                'project_code': str(candidate.get('project_code') or '').strip() or None,
+                'project_name': str(candidate.get('project_name') or '').strip() or None,
+            }
+
+            if cycle.get('level1_sent_at') is None:
+                due_at = cycle_started_at + timedelta(seconds=int(config.get('first_delay_seconds') or 0))
+                if now >= due_at:
+                    repo.update_followup_cycle(
+                        conn,
+                        cycle_id,
+                        project_code=context.get('project_code'),
+                        lead_phone=context.get('lead_phone'),
+                        advisor_phone=str(config.get('advisor_phone') or '').strip() or None,
+                        supervisor_phone=str(config.get('supervisor_phone') or '').strip() or None,
+                        last_stage_seen=stage,
+                        last_evaluated_at=now,
+                    )
+                    return {
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle_id,
+                        'status_before': status_before or 'active',
+                        'status_after': 'level1_sent',
+                        'action': 'pending_level1_send',
+                        'send_required': True,
+                        'level': 1,
+                        'context': context,
+                    }
+            elif cycle.get('level2_sent_at') is None:
+                due_at = cycle.get('level1_sent_at') + timedelta(seconds=int(config.get('second_delay_seconds') or 0))
+                if now >= due_at:
+                    repo.update_followup_cycle(
+                        conn,
+                        cycle_id,
+                        project_code=context.get('project_code'),
+                        lead_phone=context.get('lead_phone'),
+                        advisor_phone=str(config.get('advisor_phone') or '').strip() or None,
+                        supervisor_phone=str(config.get('supervisor_phone') or '').strip() or None,
+                        last_stage_seen=stage,
+                        last_evaluated_at=now,
+                    )
+                    return {
+                        'ticket_id': ticket_id_value,
+                        'cycle_id': cycle_id,
+                        'status_before': status_before or str(cycle.get('status') or 'level1_sent'),
+                        'status_after': 'level2_sent',
+                        'action': 'pending_level2_send',
+                        'send_required': True,
+                        'level': 2,
+                        'context': context,
+                    }
+
+            updated = repo.update_followup_cycle(
+                conn,
+                cycle_id,
+                project_code=context.get('project_code'),
+                lead_phone=context.get('lead_phone'),
+                advisor_phone=str(config.get('advisor_phone') or '').strip() or None,
+                supervisor_phone=str(config.get('supervisor_phone') or '').strip() or None,
+                last_stage_seen=stage,
+                last_evaluated_at=now,
+            )
+            return {
+                'ticket_id': ticket_id_value,
+                'cycle_id': cycle_id,
+                'status_before': status_before,
+                'status_after': updated.get('status'),
+                'action': 'created_cycle' if status_before is None else 'no_action',
+                'send_required': False,
+                'send_ok': None,
+            }
+
+        prepared = db.run_in_transaction(_tx_prepare)
+        if not prepared.get('cycle_id'):
+            actions.append(_jsonable(prepared))
+            continue
+
+        if not prepared.get('send_required'):
+            actions.append(_jsonable(prepared))
+            continue
+
+        level = int(prepared.get('level') or 0)
+        context = prepared.get('context') if isinstance(prepared.get('context'), dict) else {}
+        target_phone = _followup_recipient_for_level(level, config)
+        target_matches_lead = _phones_match(target_phone, context.get('lead_phone'))
+        message_text = _followup_message_for_level(
+            level,
+            config=config,
+            ticket_id=ticket_id_value,
+            context=context,
+        )
+        provider_result = await _send_supervisor_whatsapp_via_gupshup(target_phone or '', message_text) if target_phone else {
+            'send_ok': False,
+            'provider': 'gupshup',
+            'provider_status': 'error',
+            'provider_message_id': None,
+            'provider_response': {},
+            'error': 'missing_target_phone',
+        }
+        provider_status = str(provider_result.get('provider_status') or 'error')
+        provider_message_id = str(provider_result.get('provider_message_id') or '').strip() or None
+        provider_error = str(provider_result.get('error') or '').strip() or None
+        provider_response = provider_result.get('provider_response') if isinstance(provider_result.get('provider_response'), dict) else {}
+        send_ok = bool(provider_result.get('send_ok'))
+
+        def _tx_finalize(conn: Any) -> dict[str, Any]:
+            cycle_id = str(prepared['cycle_id'])
+            if send_ok:
+                status_after = 'level1_sent' if level == 1 else 'level2_sent'
+                update_kwargs = {
+                    'status': status_after,
+                    'project_code': str(context.get('project_code') or '').strip() or None,
+                    'lead_phone': str(context.get('lead_phone') or '').strip() or None,
+                    'advisor_phone': str(config.get('advisor_phone') or '').strip() or None,
+                    'supervisor_phone': str(config.get('supervisor_phone') or '').strip() or None,
+                    'last_stage_seen': STAGE_PENDING_VISIT,
+                    'last_evaluated_at': now,
+                }
+                if level == 1:
+                    update_kwargs['level1_sent_at'] = now
+                else:
+                    update_kwargs['level2_sent_at'] = now
+                cycle = repo.update_followup_cycle(conn, cycle_id, **update_kwargs)
+                event_name = f'visit.followup.level{level}.sent'
+            else:
+                cycle = repo.update_followup_cycle(
+                    conn,
+                    cycle_id,
+                    project_code=str(context.get('project_code') or '').strip() or None,
+                    lead_phone=str(context.get('lead_phone') or '').strip() or None,
+                    advisor_phone=str(config.get('advisor_phone') or '').strip() or None,
+                    supervisor_phone=str(config.get('supervisor_phone') or '').strip() or None,
+                    last_stage_seen=STAGE_PENDING_VISIT,
+                    last_evaluated_at=now,
+                )
+                event_name = f'visit.followup.level{level}.failed'
+
+            repo.insert_event(
+                conn,
+                correlation_id=ticket_id_value,
+                domain=DOMAIN,
+                name=event_name,
+                actor='system',
+                payload={
+                    'ticket_id': ticket_id_value,
+                    'cycle_id': cycle_id,
+                    'level': level,
+                    'target_phone': target_phone,
+                    'message_text': message_text,
+                    'provider': 'gupshup',
+                    'provider_status': provider_status,
+                    'provider_message_id': provider_message_id,
+                    'provider_error': provider_error,
+                    'provider_response': provider_response,
+                    'send_ok': send_ok,
+                    'target_matches_lead': target_matches_lead,
+                },
+            )
+            return {
+                'ticket_id': ticket_id_value,
+                'cycle_id': cycle_id,
+                'status_after': cycle.get('status'),
+            }
+
+        finalized = db.run_in_transaction(_tx_finalize)
+        actions.append(_jsonable({
+            'ticket_id': ticket_id_value,
+            'cycle_id': prepared.get('cycle_id'),
+            'status_before': prepared.get('status_before'),
+            'action': _followup_send_action_name(level, send_ok),
+            'status_after': finalized.get('status_after'),
+            'send_ok': send_ok,
+            'provider_status': provider_status,
+            'provider_message_id': provider_message_id,
+            'provider_error': provider_error,
+            'target_phone': target_phone,
+            'target_matches_lead': target_matches_lead,
+        }))
+
+    set_correlation_id(clean_ticket_id or clean_cliente)
+    logger.info(
+        'ORQ_FOLLOWUP_EVALUATE cliente=%s ticket_id=%s evaluated_count=%s actions=%s',
+        clean_cliente,
+        clean_ticket_id or '-',
+        len(actions),
+        [action.get('action') for action in actions],
+    )
+    return _jsonable({
+        'ok': True,
+        'cliente': clean_cliente,
+        'ticket_id': clean_ticket_id,
+        'force_now': bool(force_now),
+        'evaluated_count': len(actions),
+        'actions': actions,
+    })
+
+
+def admin_reset_runtime_phone(*, phone: str) -> dict[str, Any]:
+    normalized_phone = _normalize_phone_e164(phone)
+    logger.warning("RESET_RUNTIME_PHONE requested phone=%s", normalized_phone)
+
+    def _tx(conn: Any) -> dict[str, Any]:
+        deleted = repo.reset_by_phone(conn, normalized_phone)
+        affected_tables = list(deleted.keys())
+        return {
+            "ok": True,
+            "mode": "phone",
+            "phone": normalized_phone,
+            "deleted": deleted,
+            "affected_tables": affected_tables,
+            "protected_not_touched": repo.protected_reset_tables(),
+        }
+
+    result = db.run_in_transaction(_tx)
+    logger.warning("RESET_RUNTIME_PHONE completed phone=%s deleted=%s", normalized_phone, result.get("deleted"))
+    return _jsonable(result)
+
+
+def admin_reset_runtime_all(*, confirm: str) -> dict[str, Any]:
+    clean_confirm = str(confirm or "").strip()
+    if clean_confirm != RESET_RUNTIME_ALL_CONFIRM:
+        raise ValueError(f"confirm must be {RESET_RUNTIME_ALL_CONFIRM}")
+
+    logger.warning("RESET_RUNTIME_ALL requested")
+
+    def _tx(conn: Any) -> dict[str, Any]:
+        deleted = repo.reset_runtime_all(conn)
+        affected_tables = list(deleted.keys())
+        return {
+            "ok": True,
+            "mode": "all",
+            "deleted": deleted,
+            "affected_tables": affected_tables,
+            "protected_not_touched": repo.protected_reset_tables(),
+        }
+
+    result = db.run_in_transaction(_tx)
+    logger.warning("RESET_RUNTIME_ALL completed deleted=%s", result.get("deleted"))
+    return _jsonable(result)
 
 
 def admin_reset_phone(*, phone: str) -> dict[str, Any]:
@@ -7850,6 +9097,11 @@ async def ingest_from_provider(
         variant = "choose_project"
         reply_text = _build_vera_project_fallback()
 
+    visit_requested = bool(
+        visit_requested
+        or str((qa_resolution or {}).get("intent") or "").strip().upper() == "VISIT_REQUEST"
+    )
+
     def _tx_apply_intent(conn: Any) -> dict[str, Any]:
         if not ticket_id:
             return {"stage": None}
@@ -8219,7 +9471,7 @@ async def propose_visit(
         if isinstance(provider_result.get("provider_response"), dict)
         else {}
     )
-    sent_at = datetime.now(timezone.utc) if provider_status == "sent" else None
+    sent_at = datetime.now(timezone.utc) if _provider_status_is_accepted(provider_status) else None
     provider_persist_error: str | None = None
     event_name = "visit.proposed" if clean_mode == "propose" else "visit.rescheduled"
 
@@ -8622,7 +9874,7 @@ async def supervisor_send(
         if isinstance(provider_result.get("provider_response"), dict)
         else {}
     )
-    sent_at = datetime.now(timezone.utc) if provider_status == "sent" else None
+    sent_at = datetime.now(timezone.utc) if _provider_status_is_accepted(provider_status) else None
     provider_persist_error: str | None = None
 
     def _tx_finalize(conn: Any) -> None:
@@ -8681,7 +9933,7 @@ async def supervisor_send(
     db.run_in_transaction(_tx_finalize)
 
     set_correlation_id(str(prepared["ticket_id"]))
-    if provider_status == "sent":
+    if _provider_status_is_accepted(provider_status):
         logger.info(
             "ORQ_SUPERVISOR_SEND correlation_id=%s target=%s phone=%s provider=%s status=%s provider_message_id=%s message_id=%s",
             prepared["ticket_id"],

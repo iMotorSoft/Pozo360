@@ -1,0 +1,19 @@
+---
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import OrquestadorAdminPanel from "../../../components/demo/vertice360-orquestador/OrquestadorAdminPanel.svelte";
+
+const branding = {
+  displayName: "Vertice360 Admin Demo",
+  logoUrl: "/logo_v360.png",
+  primaryColor: "#0F766E",
+  secondaryColor: "#38BDF8",
+  accentColor: "#F59E0B",
+};
+
+const initialCliente = (Astro.url.searchParams.get("cliente") ?? "").trim();
+const initialPhone = (Astro.url.searchParams.get("phone") ?? "").trim();
+---
+
+<BaseLayout brand={branding}>
+  <OrquestadorAdminPanel client:load initialCliente={initialCliente} initialPhone={initialPhone} />
+</BaseLayout>

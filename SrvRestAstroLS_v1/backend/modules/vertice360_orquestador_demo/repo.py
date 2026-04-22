@@ -3,12 +3,43 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_SCHEMA_CACHE: dict[str, list[str]] | None = None
 _PROJECT_CAPABILITIES_CACHE: dict[str, bool] | None = None
+_VISIT_FOLLOWUP_CONFIG_SCHEMA_SQL: str | None = None
+_VISIT_FOLLOWUP_CYCLE_SCHEMA_SQL: str | None = None
+
+PROTECTED_RESET_TABLES: tuple[str, ...] = (
+    "demo_project_bundles",
+    "demo_project_facts",
+    "demo_project_profile",
+    "demo_unit_profile",
+    "demo_units",
+    "projects",
+    "marketing_assets",
+    "visit_followup_config",
+    "users",
+    "developers",
+)
+
+RUNTIME_RESET_TABLES: tuple[str, ...] = (
+    "events",
+    "visit_confirmations",
+    "visit_proposals",
+    "messages",
+    "tickets",
+    "conversations",
+    "leads",
+)
+
+OPTIONAL_TICKET_RUNTIME_TABLES: tuple[str, ...] = (
+    "visit_followup_cycle",
+    "visit_followup_cycles",
+)
 
 _PROJECT_TABLE_KEYWORDS = (
     "project",
@@ -53,6 +84,498 @@ def ensure_ticket_inbound_line_columns(conn: Any) -> None:
         return
     conn.execute("alter table tickets add column if not exists inbound_line_key text")
     conn.execute("alter table tickets add column if not exists inbound_line_phone text")
+
+
+
+def _load_visit_followup_config_schema_sql() -> str:
+    global _VISIT_FOLLOWUP_CONFIG_SCHEMA_SQL
+    if _VISIT_FOLLOWUP_CONFIG_SCHEMA_SQL is None:
+        schema_path = Path(__file__).resolve().parents[2] / "db" / "visit_followup_config_schema.sql"
+        _VISIT_FOLLOWUP_CONFIG_SCHEMA_SQL = schema_path.read_text(encoding="utf-8")
+    return _VISIT_FOLLOWUP_CONFIG_SCHEMA_SQL
+
+
+def _load_visit_followup_cycle_schema_sql() -> str:
+    global _VISIT_FOLLOWUP_CYCLE_SCHEMA_SQL
+    if _VISIT_FOLLOWUP_CYCLE_SCHEMA_SQL is None:
+        schema_path = Path(__file__).resolve().parents[2] / "db" / "visit_followup_cycle_schema.sql"
+        _VISIT_FOLLOWUP_CYCLE_SCHEMA_SQL = schema_path.read_text(encoding="utf-8")
+    return _VISIT_FOLLOWUP_CYCLE_SCHEMA_SQL
+
+
+def ensure_visit_followup_config_schema(conn: Any) -> None:
+    conn.execute(_load_visit_followup_config_schema_sql())
+
+
+def ensure_visit_followup_cycle_schema(conn: Any) -> None:
+    conn.execute(_load_visit_followup_cycle_schema_sql())
+
+
+def get_followup_config(conn: Any, cliente: str) -> dict[str, Any] | None:
+    ensure_visit_followup_config_schema(conn)
+    return fetch_one(
+        conn,
+        """
+        select
+            cliente,
+            enabled,
+            advisor_phone,
+            supervisor_phone,
+            first_delay_seconds,
+            second_delay_seconds,
+            level1_template,
+            level2_template,
+            board_base_url,
+            allow_manual_evaluate,
+            updated_at,
+            updated_by
+        from visit_followup_config
+        where cliente = %s
+        limit 1
+        """,
+        (cliente,),
+    )
+
+
+def upsert_followup_config(
+    conn: Any,
+    *,
+    cliente: str,
+    enabled: bool,
+    advisor_phone: str | None,
+    supervisor_phone: str | None,
+    first_delay_seconds: int,
+    second_delay_seconds: int,
+    level1_template: str | None,
+    level2_template: str | None,
+    board_base_url: str | None,
+    allow_manual_evaluate: bool,
+    updated_by: str | None,
+) -> dict[str, Any]:
+    ensure_visit_followup_config_schema(conn)
+    row = fetch_one(
+        conn,
+        """
+        insert into visit_followup_config (
+            cliente,
+            enabled,
+            advisor_phone,
+            supervisor_phone,
+            first_delay_seconds,
+            second_delay_seconds,
+            level1_template,
+            level2_template,
+            board_base_url,
+            allow_manual_evaluate,
+            updated_by,
+            updated_at
+        )
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+        on conflict (cliente) do update
+        set enabled = excluded.enabled,
+            advisor_phone = excluded.advisor_phone,
+            supervisor_phone = excluded.supervisor_phone,
+            first_delay_seconds = excluded.first_delay_seconds,
+            second_delay_seconds = excluded.second_delay_seconds,
+            level1_template = excluded.level1_template,
+            level2_template = excluded.level2_template,
+            board_base_url = excluded.board_base_url,
+            allow_manual_evaluate = excluded.allow_manual_evaluate,
+            updated_by = excluded.updated_by,
+            updated_at = now()
+        returning
+            cliente,
+            enabled,
+            advisor_phone,
+            supervisor_phone,
+            first_delay_seconds,
+            second_delay_seconds,
+            level1_template,
+            level2_template,
+            board_base_url,
+            allow_manual_evaluate,
+            updated_at,
+            updated_by
+        """,
+        (
+            cliente,
+            enabled,
+            advisor_phone,
+            supervisor_phone,
+            first_delay_seconds,
+            second_delay_seconds,
+            level1_template,
+            level2_template,
+            board_base_url,
+            allow_manual_evaluate,
+            updated_by,
+        ),
+    )
+    if row is None:
+        raise RuntimeError("Failed to upsert followup config")
+    return row
+
+
+def get_active_followup_cycle(conn: Any, ticket_id: str) -> dict[str, Any] | None:
+    ensure_visit_followup_cycle_schema(conn)
+    return fetch_one(
+        conn,
+        """
+        select
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            last_human_action_at,
+            level1_sent_at,
+            level2_sent_at,
+            cancel_reason,
+            closed_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_evaluated_at,
+            last_stage_seen,
+            created_at,
+            updated_at
+        from visit_followup_cycle
+        where ticket_id = %s
+          and status in ('active', 'level1_sent', 'level2_sent')
+        order by created_at desc
+        limit 1
+        """,
+        (ticket_id,),
+    )
+
+
+def create_followup_cycle(
+    conn: Any,
+    *,
+    cycle_id: str,
+    ticket_id: str,
+    cliente: str,
+    status: str,
+    started_at: Any,
+    project_code: str | None,
+    lead_phone: str | None,
+    advisor_phone: str | None,
+    supervisor_phone: str | None,
+    last_stage_seen: str | None,
+    last_evaluated_at: Any | None,
+) -> dict[str, Any]:
+    ensure_visit_followup_cycle_schema(conn)
+    row = fetch_one(
+        conn,
+        """
+        insert into visit_followup_cycle (
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_stage_seen,
+            last_evaluated_at,
+            created_at,
+            updated_at
+        )
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+        returning
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            last_human_action_at,
+            level1_sent_at,
+            level2_sent_at,
+            cancel_reason,
+            closed_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_evaluated_at,
+            last_stage_seen,
+            created_at,
+            updated_at
+        """,
+        (
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_stage_seen,
+            last_evaluated_at,
+        ),
+    )
+    if row is None:
+        raise RuntimeError("Failed to create followup cycle")
+    return row
+
+
+def update_followup_cycle(conn: Any, cycle_id: str, **changes: Any) -> dict[str, Any]:
+    ensure_visit_followup_cycle_schema(conn)
+    allowed_fields = {
+        'status',
+        'started_at',
+        'last_human_action_at',
+        'level1_sent_at',
+        'level2_sent_at',
+        'cancel_reason',
+        'closed_at',
+        'project_code',
+        'lead_phone',
+        'advisor_phone',
+        'supervisor_phone',
+        'last_evaluated_at',
+        'last_stage_seen',
+    }
+    sets: list[str] = []
+    params: list[Any] = []
+    for field_name, value in changes.items():
+        if field_name not in allowed_fields:
+            continue
+        sets.append(f"{field_name} = %s")
+        params.append(value)
+
+    if not sets:
+        current = fetch_one(
+            conn,
+            """
+            select
+                cycle_id,
+                ticket_id,
+                cliente,
+                status,
+                started_at,
+                last_human_action_at,
+                level1_sent_at,
+                level2_sent_at,
+                cancel_reason,
+                closed_at,
+                project_code,
+                lead_phone,
+                advisor_phone,
+                supervisor_phone,
+                last_evaluated_at,
+                last_stage_seen,
+                created_at,
+                updated_at
+            from visit_followup_cycle
+            where cycle_id = %s
+            limit 1
+            """,
+            (cycle_id,),
+        )
+        if current is None:
+            raise KeyError("followup cycle not found")
+        return current
+
+    params.append(cycle_id)
+    row = fetch_one(
+        conn,
+        f"""
+        update visit_followup_cycle
+        set {", ".join(sets)},
+            updated_at = now()
+        where cycle_id = %s
+        returning
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            last_human_action_at,
+            level1_sent_at,
+            level2_sent_at,
+            cancel_reason,
+            closed_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_evaluated_at,
+            last_stage_seen,
+            created_at,
+            updated_at
+        """,
+        tuple(params),
+    )
+    if row is None:
+        raise KeyError("followup cycle not found")
+    return row
+
+
+def close_followup_cycle(
+    conn: Any,
+    cycle_id: str,
+    *,
+    status: str,
+    cancel_reason: str | None,
+    closed_at: Any,
+    last_human_action_at: Any | None = None,
+    last_stage_seen: str | None = None,
+    last_evaluated_at: Any | None = None,
+) -> dict[str, Any]:
+    return update_followup_cycle(
+        conn,
+        cycle_id,
+        status=status,
+        cancel_reason=cancel_reason,
+        closed_at=closed_at,
+        last_human_action_at=last_human_action_at,
+        last_stage_seen=last_stage_seen,
+        last_evaluated_at=last_evaluated_at,
+    )
+
+
+def list_followup_candidates(conn: Any, cliente: str, ticket_id: str | None = None) -> list[dict[str, Any]]:
+    ensure_visit_followup_cycle_schema(conn)
+    clean_ticket_id = str(ticket_id or '').strip()
+    return fetch_all(
+        conn,
+        """
+        with candidate_ids as (
+            select t.id::text as ticket_id
+            from tickets t
+            where (%s = '' or t.id::text = %s)
+              and t.stage = 'Pendiente de visita'::lead_stage
+            union
+            select c.ticket_id
+            from visit_followup_cycle c
+            where c.status in ('active', 'level1_sent', 'level2_sent')
+              and (%s = '' or c.ticket_id = %s)
+        )
+        select
+            ci.ticket_id,
+            t.stage,
+            t.conversation_id,
+            t.lead_id,
+            l.phone_e164 as lead_phone,
+            l.name as lead_name,
+            p.code as project_code,
+            p.name as project_name,
+            coalesce(vr.created_at, t.updated_at, t.created_at) as followup_started_at,
+            vr.created_at as visit_requested_at,
+            t.updated_at as ticket_updated_at,
+            t.created_at as ticket_created_at
+        from candidate_ids ci
+        left join tickets t on t.id::text = ci.ticket_id
+        left join leads l on l.id = t.lead_id
+        left join projects p on p.id = t.project_id
+        left join lateral (
+            select e.created_at
+            from events e
+            where e.correlation_id::text = ci.ticket_id
+              and e.name = 'orq.visit.requested'
+            order by e.created_at desc
+            limit 1
+        ) vr on true
+        order by coalesce(vr.created_at, t.updated_at, t.created_at) asc nulls last, ci.ticket_id asc
+        """,
+        (
+            clean_ticket_id,
+            clean_ticket_id,
+            clean_ticket_id,
+            clean_ticket_id,
+        ),
+    )
+
+
+def detect_last_human_action(
+    conn: Any,
+    *,
+    ticket_id: str,
+    lead_id: str | None,
+    since: Any,
+    until: Any | None = None,
+) -> dict[str, Any] | None:
+    params: list[Any] = [ticket_id, since]
+    time_filter = "and created_at >= %s"
+    if until is not None:
+        time_filter += " and created_at <= %s"
+        params.append(until)
+
+    message_sql = "select null::timestamptz as created_at, null::text as source, null::text as actor, null::text as detail where false"
+    message_params: list[Any] = []
+    if lead_id:
+        message_sql = f"""
+            select created_at, 'message'::text as source, actor::text as actor, text as detail
+            from messages
+            where lead_id = %s
+              and direction = 'out'
+              and actor in ('advisor'::actor_role, 'supervisor'::actor_role)
+              {time_filter}
+        """
+        message_params = [lead_id, since]
+        if until is not None:
+            message_params.append(until)
+
+    event_sql = f"""
+        select created_at, 'event'::text as source, actor::text as actor, name as detail
+        from events
+        where correlation_id::text = %s
+          and actor in ('advisor'::actor_role, 'supervisor'::actor_role)
+          {time_filter}
+    """
+    event_params = [ticket_id, since]
+    if until is not None:
+        event_params.append(until)
+
+    query = f"""
+        select created_at, source, actor, detail
+        from (
+            {message_sql}
+            union all
+            {event_sql}
+        ) actions
+        order by created_at desc
+        limit 1
+    """
+    return fetch_one(conn, query, tuple(message_params + event_params))
+
+
+def get_followup_cycle_by_id(conn: Any, cycle_id: str) -> dict[str, Any] | None:
+    ensure_visit_followup_cycle_schema(conn)
+    return fetch_one(
+        conn,
+        """
+        select
+            cycle_id,
+            ticket_id,
+            cliente,
+            status,
+            started_at,
+            last_human_action_at,
+            level1_sent_at,
+            level2_sent_at,
+            cancel_reason,
+            closed_at,
+            project_code,
+            lead_phone,
+            advisor_phone,
+            supervisor_phone,
+            last_evaluated_at,
+            last_stage_seen,
+            created_at,
+            updated_at
+        from visit_followup_cycle
+        where cycle_id = %s
+        limit 1
+        """,
+        (cycle_id,),
+    )
 
 
 def list_projects(conn: Any) -> list[dict[str, Any]]:
@@ -164,6 +687,73 @@ def get_project_context(conn: Any, project_code: str) -> dict[str, Any] | None:
     )
 
 
+def protected_reset_tables() -> list[str]:
+    return list(PROTECTED_RESET_TABLES)
+
+
+def _runtime_table_exists(conn: Any, table_name: str) -> bool:
+    row = fetch_one(
+        conn,
+        "select to_regclass(%s) as regclass",
+        (f"public.{table_name}",),
+    )
+    return bool(row and row.get("regclass"))
+
+
+def _optional_ticket_runtime_tables(conn: Any) -> list[str]:
+    return [table_name for table_name in OPTIONAL_TICKET_RUNTIME_TABLES if _runtime_table_exists(conn, table_name)]
+
+
+def runtime_resettable_tables(conn: Any) -> list[str]:
+    return [*RUNTIME_RESET_TABLES[:-1], *_optional_ticket_runtime_tables(conn), RUNTIME_RESET_TABLES[-1]]
+
+
+def _empty_runtime_reset_counts(conn: Any) -> dict[str, int]:
+    return {table_name: 0 for table_name in runtime_resettable_tables(conn)}
+
+
+def _delete_optional_ticket_runtime(conn: Any, table_name: str, ticket_ids: list[str]) -> int:
+    if not ticket_ids or not _runtime_table_exists(conn, table_name):
+        return 0
+    placeholders = ", ".join(["%s"] * len(ticket_ids))
+    cursor = conn.execute(
+        f"delete from {table_name} where ticket_id in ({placeholders})",
+        tuple(ticket_ids),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def reset_runtime_all(conn: Any) -> dict[str, int]:
+    counts = _empty_runtime_reset_counts(conn)
+
+    cursor = conn.execute("delete from events")
+    counts["events"] = int(cursor.rowcount or 0)
+
+    for table_name in _optional_ticket_runtime_tables(conn):
+        cursor = conn.execute(f"delete from {table_name}")
+        counts[table_name] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from visit_confirmations")
+    counts["visit_confirmations"] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from visit_proposals")
+    counts["visit_proposals"] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from messages")
+    counts["messages"] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from tickets")
+    counts["tickets"] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from conversations")
+    counts["conversations"] = int(cursor.rowcount or 0)
+
+    cursor = conn.execute("delete from leads")
+    counts["leads"] = int(cursor.rowcount or 0)
+
+    return counts
+
+
 def get_lead_by_phone(conn: Any, phone_e164: str) -> dict[str, Any] | None:
     return fetch_one(
         conn,
@@ -178,15 +768,7 @@ def get_lead_by_phone(conn: Any, phone_e164: str) -> dict[str, Any] | None:
 
 
 def reset_by_phone(conn: Any, phone_e164: str) -> dict[str, int]:
-    counts = {
-        "events": 0,
-        "visit_confirmations": 0,
-        "visit_proposals": 0,
-        "messages": 0,
-        "tickets": 0,
-        "conversations": 0,
-        "leads": 0,
-    }
+    counts = _empty_runtime_reset_counts(conn)
     clean_phone = str(phone_e164 or "").strip()
     if not clean_phone:
         return counts
@@ -208,6 +790,9 @@ def reset_by_phone(conn: Any, phone_e164: str) -> dict[str, int]:
             params,
         )
         counts["events"] = int(cursor.rowcount or 0)
+
+        for table_name in _optional_ticket_runtime_tables(conn):
+            counts[table_name] = _delete_optional_ticket_runtime(conn, table_name, ticket_ids)
 
         cursor = conn.execute(
             f"delete from visit_confirmations where ticket_id in ({placeholders})",

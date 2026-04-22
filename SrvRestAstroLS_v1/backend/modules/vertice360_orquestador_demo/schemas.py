@@ -17,6 +17,14 @@ class AdminResetPhoneRequest(BaseModel):
     phone: str = Field(..., min_length=3)
 
 
+class ResetRuntimePhoneRequest(BaseModel):
+    phone: str = Field(..., min_length=3)
+
+
+class ResetRuntimeAllRequest(BaseModel):
+    confirm: str = Field(..., min_length=1)
+
+
 class VisitProposeRequest(BaseModel):
     ticket_id: str = Field(..., min_length=1)
     advisor_name: str | None = None
@@ -47,6 +55,26 @@ class SupervisorSendRequest(BaseModel):
     lead_phone: str | None = Field(default=None, min_length=3)
     target: Literal["client", "advisor"] = "client"
     text: str = Field(..., min_length=1)
+
+
+class FollowupConfigSetRequest(BaseModel):
+    cliente: str = Field(..., min_length=1)
+    enabled: bool = True
+    advisor_phone: str | None = None
+    supervisor_phone: str | None = None
+    first_delay_seconds: int
+    second_delay_seconds: int
+    level1_template: str | None = None
+    level2_template: str | None = None
+    board_base_url: str | None = None
+    allow_manual_evaluate: bool = True
+    updated_by: str | None = None
+
+
+class FollowupEvaluateRequest(BaseModel):
+    cliente: str = Field(..., min_length=1)
+    ticket_id: str | None = Field(default=None, min_length=1)
+    force_now: bool = False
 
 
 class ApiEnvelope(BaseModel):

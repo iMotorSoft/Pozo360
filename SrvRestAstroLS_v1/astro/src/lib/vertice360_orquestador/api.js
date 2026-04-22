@@ -77,7 +77,15 @@ const parseErrorPayload = async (response) => {
   }
 };
 
-const request = async (path, { method = "GET", body, signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) => {
+const buildAdminHeaders = (adminToken) => {
+  const clean = String(adminToken || "").trim();
+  return clean ? { "x-v360-admin-token": clean } : {};
+};
+
+const request = async (
+  path,
+  { method = "GET", body, signal, timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {},
+) => {
   const url = buildRequestUrl(path);
   const { signal: mergedSignal, cleanup } = mergeSignals(signal, timeoutMs);
 
@@ -86,6 +94,7 @@ const request = async (path, { method = "GET", body, signal, timeoutMs = DEFAULT
       method,
       headers: {
         "Content-Type": "application/json",
+        ...(headers || {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: mergedSignal,
@@ -144,4 +153,50 @@ export const rescheduleVisit = async (payload, { signal } = {}) => {
 
 export const supervisorSend = async (payload, { signal } = {}) => {
   return request("supervisor/send", { method: "POST", body: payload, signal });
+};
+
+export const followupConfigGet = async ({ cliente, adminToken, signal } = {}) => {
+  if (!cliente) throw new Error("cliente es requerido");
+  const query = buildQueryString({ cliente });
+  return request(`followup/config/get${query}`, {
+    method: "GET",
+    signal,
+    headers: buildAdminHeaders(adminToken),
+  });
+};
+
+export const followupConfigSet = async (payload, { adminToken, signal } = {}) => {
+  return request("followup/config/set", {
+    method: "POST",
+    body: payload,
+    signal,
+    headers: buildAdminHeaders(adminToken),
+  });
+};
+
+export const followupEvaluate = async (payload, { adminToken, signal } = {}) => {
+  return request("followup/evaluate", {
+    method: "POST",
+    body: payload,
+    signal,
+    headers: buildAdminHeaders(adminToken),
+  });
+};
+
+export const resetRuntimePhone = async (payload, { adminToken, signal } = {}) => {
+  return request("admin/reset_runtime_phone", {
+    method: "POST",
+    body: payload,
+    signal,
+    headers: buildAdminHeaders(adminToken),
+  });
+};
+
+export const resetRuntimeAll = async ({ confirm = "RESET_RUNTIME_ONLY" } = {}, { adminToken, signal } = {}) => {
+  return request("admin/reset_runtime_all", {
+    method: "POST",
+    body: { confirm },
+    signal,
+    headers: buildAdminHeaders(adminToken),
+  });
 };

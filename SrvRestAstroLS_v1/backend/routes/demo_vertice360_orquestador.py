@@ -9,6 +9,10 @@ from backend import globalVar
 from backend.modules.vertice360_orquestador_demo import services
 from backend.modules.vertice360_orquestador_demo.schemas import (
     AdminResetPhoneRequest,
+    ResetRuntimeAllRequest,
+    ResetRuntimePhoneRequest,
+    FollowupConfigSetRequest,
+    FollowupEvaluateRequest,
     IngestMessageRequest,
     SupervisorSendRequest,
     VisitConfirmRequest,
@@ -28,19 +32,30 @@ def _map_service_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+def _validate_admin_token(request: Request, *, disabled_detail: str) -> None:
+    expected = str(globalVar.V360_ADMIN_TOKEN or "").strip()
+    provided = str(request.headers.get("x-v360-admin-token") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=401, detail=disabled_detail)
+    if not provided or provided != expected:
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+
 def _validate_admin_reset_access(request: Request) -> None:
     if str(globalVar.RUN_ENV).lower() != "dev":
         raise HTTPException(
             status_code=403,
             detail="admin reset is only available in dev",
         )
+    _validate_admin_token(request, disabled_detail="admin reset disabled")
 
-    expected = str(globalVar.V360_ADMIN_TOKEN or "").strip()
-    provided = str(request.headers.get("x-v360-admin-token") or "").strip()
-    if not expected:
-        raise HTTPException(status_code=401, detail="admin reset disabled")
-    if not provided or provided != expected:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+
+def _validate_followup_config_access(request: Request) -> None:
+    _validate_admin_token(request, disabled_detail="followup config access disabled")
+
+
+def _validate_runtime_reset_access(request: Request) -> None:
+    _validate_admin_token(request, disabled_detail="runtime reset disabled")
 
 
 @get("/bootstrap")
@@ -113,6 +128,77 @@ async def admin_reset_phone(request: Request, data: AdminResetPhoneRequest) -> d
         raise _map_service_error(exc) from exc
 
 
+@post("/admin/reset_runtime_phone", status_code=200)
+async def admin_reset_runtime_phone(request: Request, data: ResetRuntimePhoneRequest) -> dict[str, Any]:
+    try:
+        _validate_runtime_reset_access(request)
+        return services.admin_reset_runtime_phone(phone=data.phone)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _map_service_error(exc) from exc
+
+
+@post("/admin/reset_runtime_all", status_code=200)
+async def admin_reset_runtime_all(request: Request, data: ResetRuntimeAllRequest) -> dict[str, Any]:
+    try:
+        _validate_runtime_reset_access(request)
+        return services.admin_reset_runtime_all(confirm=data.confirm)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _map_service_error(exc) from exc
+
+
+@post("/followup/config/set", status_code=200)
+async def followup_config_set(request: Request, data: FollowupConfigSetRequest) -> dict[str, Any]:
+    try:
+        _validate_followup_config_access(request)
+        return services.set_followup_config(
+            cliente=data.cliente,
+            enabled=data.enabled,
+            advisor_phone=data.advisor_phone,
+            supervisor_phone=data.supervisor_phone,
+            first_delay_seconds=data.first_delay_seconds,
+            second_delay_seconds=data.second_delay_seconds,
+            level1_template=data.level1_template,
+            level2_template=data.level2_template,
+            updated_by=data.updated_by,
+            board_base_url=data.board_base_url,
+            allow_manual_evaluate=data.allow_manual_evaluate,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _map_service_error(exc) from exc
+
+
+@get("/followup/config/get")
+async def followup_config_get(request: Request, cliente: str) -> dict[str, Any]:
+    try:
+        _validate_followup_config_access(request)
+        return services.get_followup_config(cliente=cliente)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _map_service_error(exc) from exc
+
+
+@post("/followup/evaluate", status_code=200)
+async def followup_evaluate(request: Request, data: FollowupEvaluateRequest) -> dict[str, Any]:
+    try:
+        _validate_followup_config_access(request)
+        return await services.evaluate_followup(
+            cliente=data.cliente,
+            ticket_id=data.ticket_id,
+            force_now=data.force_now,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _map_service_error(exc) from exc
+
+
 @post("/visit/propose", status_code=200)
 async def visit_propose(data: VisitProposeRequest) -> dict[str, Any]:
     try:
@@ -179,6 +265,11 @@ router = Router(
         ticket_detail,
         ingest_message,
         admin_reset_phone,
+        admin_reset_runtime_phone,
+        admin_reset_runtime_all,
+        followup_config_set,
+        followup_config_get,
+        followup_evaluate,
         visit_propose,
         visit_confirm,
         visit_reschedule,

@@ -187,7 +187,7 @@ def test_supervisor_send_success(client, monkeypatch) -> None:
 
     assert state["provider_columns_ensured"] == 1
     assert len(state["provider_updates"]) == 1
-    assert state["provider_updates"][0]["provider_status"] == "sent"
+    assert state["provider_updates"][0]["provider_status"] == "submitted"
     assert state["provider_updates"][0]["provider_message_id"] == "gs-out-123"
 
 

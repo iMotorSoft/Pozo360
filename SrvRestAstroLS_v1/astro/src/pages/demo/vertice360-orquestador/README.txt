@@ -4,12 +4,15 @@
 
 - LIVE oficial: `/demo/vertice360-orquestador/`
 - LIVE con cliente: `/demo/vertice360-orquestador/?cliente=5491130946950`
+- ADMIN backstage: `/demo/vertice360-orquestador/admin`
+- ADMIN con defaults: `/demo/vertice360-orquestador/admin?cliente=prod-celulares-check-20260324&phone=59168912007`
 - UX wireframe oficial: `/demo/vertice360-orquestador/ux`
 - UX con cliente: `/demo/vertice360-orquestador/ux?cliente=5491100000000`
 
 ## Alcance actual
 
 - LIVE: integración con backend (`/api/demo/vertice360-orquestador/*`) vía `api.js`.
+- ADMIN: consola operativa para `followup/config`, `reset_runtime_*` y `followup/evaluate`.
 - UX: wireframe navegable para validación de diseño con mocks.
 
 ## Navegación esperada
