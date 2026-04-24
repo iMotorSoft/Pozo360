@@ -42,3 +42,146 @@
   - recomendacion: hacerla como pagina operativa separada de la demo publica, no embebida en el recorrido principal
   - principal riesgo operativo: exponer el `x-v360-admin-token` en frontend y facilitar resets/configuraciones equivocadas durante demos en vivo
   - recomendacion actual: avanzar con una consola de backstage con guardrails, no con un boton simple en la UI publica
+
+## Update 2026-04-22 2
+
+- Se implemento y publico la pagina operativa de backstage:
+  - URL: `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/admin/`
+  - query util para demo: `?cliente=prod-celulares-check-20260324&phone=59168912007`
+- La pagina admin permite:
+  - `Get Config`
+  - `Set Config`
+  - `Reset Runtime Phone`
+  - `Reset Runtime All`
+  - `Evaluate General`
+  - `Evaluate por ticket`
+- El deploy de frontend se hace por build local de `astro` + sync de `astro/dist` al server por `rsync`.
+- Se valido en produccion que:
+  - `reset_runtime_phone` limpia correctamente el runtime del lead
+  - `evaluate` funciona desde la pagina admin cuando el ticket esta realmente en `Pendiente de visita`
+  - el flujo manual live quedo operativo para demos
+- Se hizo push a GitHub del bloque funcional:
+  - branch: `main`
+  - commit: `aed5303`
+  - mensaje: `Add follow-up admin controls and runtime reset flow`
+- Quedaron explicitamente afuera del commit algunos cambios ajenos presentes en el worktree local.
+- Se agrego en local un ajuste no critico para mensajes internos de follow-up `level1` y `level2`:
+  - al final del mensaje agrega `Podés seguir en el panel:` seguido de la URL live del lead
+  - formato esperado:
+    - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/?cliente=<lead_phone_digits>`
+  - usa el `lead_phone` real del ticket
+  - no duplica la URL si un template custom ya la incluye
+- Archivo local copiado a produccion para ese ajuste:
+  - `backend/modules/vertice360_orquestador_demo/services.py`
+- Backup remoto creado:
+  - `services.py.bak-20260422-followup-panel-link`
+- Verificacion remota realizada en el VPS:
+  - existe `_append_followup_panel_link`
+  - existe el texto `Podés seguir en el panel:`
+- Estado final de este ultimo cambio:
+  - el archivo ya esta copiado al server
+  - falta reiniciar el backend de produccion para que el texto nuevo empiece a salir en `level1` y `level2`
+
+## Pendiente para retomar
+
+- El backend de produccion ya fue reiniciado despues de copiar el cambio del link al panel en mensajes `level1` y `level2`.
+- Nuevo issue detectado en la UI live:
+  - el boton para dar fecha de cita no levanta el modal
+- Queda pendiente revisar manana el flujo frontend asociado al modal de propuesta de visita:
+  - boton/trigger en la vista live
+  - montaje del modal
+  - estado de apertura/cierre
+  - integracion con `visit/propose`
+
+## Update 2026-04-23
+
+- Se reprodujo y corrigio en produccion el bug de los modales live del orquestador:
+  - `Proponer visita`
+  - `Ver detalle` / chat
+- Causa confirmada con Playwright:
+  - ambos componentes usaban `<dialog>` nativo pero solo prendian la clase `modal-open`
+  - el `dialog.open` quedaba en `false` y el browser mantenia `display:none`
+- Fix aplicado en frontend:
+  - `astro/src/components/demo/vertice360-orquestador/VisitProposalModal.svelte`
+  - `astro/src/components/demo/vertice360-orquestador/LeadDetailModal.svelte`
+  - ahora sincronizan `open` con `showModal()` / `close()`
+- Validacion realizada en live con Playwright post-deploy:
+  - ambos modales abren
+  - ambos cierran por `Escape`
+  - ambos cierran por `X`
+  - ambos cierran por backdrop
+  - el detalle carga historial real y el composer supervisor habilita `Enviar` al escribir
+- Deploy realizado:
+  - build local de `astro`
+  - sync de `astro/dist` al server por `rsync`
+
+- Se reviso tambien la pagina admin/backstage:
+  - URL: `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/admin/?cliente=prod-celulares-check-20260324&phone=59168912007`
+- Bug detectado y corregido en admin:
+  - el query param `phone` no se reflejaba en el formulario
+  - causa: la pagina es estatica y el panel no releia `window.location.search` al hidratar
+  - fix aplicado en `astro/src/components/demo/vertice360-orquestador/OrquestadorAdminPanel.svelte`
+  - validado en live:
+    - el campo telefono ahora carga `+59168912007`
+    - el chip `Demo actual` muestra `+59168912007`
+
+- Se reviso `Reset Runtime Phone`:
+  - no estaba roto a nivel request
+  - el problema era de feedback operativo
+  - hoy el runtime live para:
+    - `cliente=prod-celulares-check-20260324`
+    - y el board por `59168912007`
+    - devolvia `tickets_total=0`
+  - por eso el reset por telefono quedaba en no-op
+- Mejora aplicada en admin:
+  - si `reset_runtime_phone` borra `0` registros, la UI ahora avisa que no encontro runtime para ese lead phone
+  - tambien aclara que no sirve usar `advisor/supervisor` en lugar del telefono real del lead
+- Mejora aplicada en backend local:
+  - `backend/modules/vertice360_orquestador_demo/services.py`
+  - `admin_reset_runtime_phone` ahora agrega:
+    - `deleted_total`
+    - `matched_runtime`
+    - `message`
+  - nota: este cambio backend quedo local; no se deployo al server porque el server demo se levanta manualmente y no se reinicio backend en esta sesion
+
+- Se reviso `Evaluate por ticket`:
+  - la UI parecia fallar, pero el backend live respondia correctamente
+  - request validado con token productivo:
+    - `cliente=prod-celulares-check-20260324`
+    - `ticket_id=a2d4acc0-f354-4e31-9a77-b89c0e9240c8`
+  - respuesta real del backend:
+    - `evaluated_count=1`
+    - `action=no_action`
+    - `status_before=level2_sent`
+    - `status_after=level2_sent`
+  - conclusion:
+    - ese ticket ya estaba escalado a `level2_sent`
+    - `Evaluate por ticket` no reenviaba nada porque no habia accion pendiente
+- Mejora aplicada en frontend admin:
+  - la notificacion ya no dice solo `Evaluate por ticket ejecutado`
+  - ahora resume el resultado:
+    - `sent_level1`
+    - `sent_level2`
+    - `sin accion en estado ...`
+    - `closed_*`
+    - `ciclo creado`
+- Deploy realizado:
+  - build local de `astro`
+  - nuevo sync de `astro/dist` al server por `rsync`
+
+## Estado para retomar manana
+
+- Frontend live y admin publicados con fixes de modales y mejor feedback operativo.
+- `Evaluate por ticket` no requiere fix backend inmediato para el caso reportado; el caso de `a2d4acc0-f354-4e31-9a77-b89c0e9240c8` estaba en `level2_sent`, por eso devolvio `no_action`.
+- Si se necesita re-disparar un follow-up ya escalado:
+  - hoy no existe accion explicita de `force resend`
+  - probablemente haya que definir una de estas dos opciones:
+    - endpoint de reenvio forzado por ticket
+    - reset puntual del ciclo follow-up para ese ticket
+- Quedo local sin deploy backend:
+  - metadata adicional en `admin_reset_runtime_phone`
+  - test nuevo en `backend/tests/test_orquestador_runtime_reset.py`
+- Si manana se decide publicar el cambio backend:
+  - copiar `backend/modules/vertice360_orquestador_demo/services.py`
+  - reiniciar el backend demo levantado con:
+    - `VERTICE360_ENV=prod V360_ADMIN_TOKEN=v360-prod-token python ls_iMotorSoft_Srv01_demo.py`

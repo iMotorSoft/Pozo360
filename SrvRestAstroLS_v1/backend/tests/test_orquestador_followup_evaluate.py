@@ -269,6 +269,8 @@ def test_followup_evaluate_sends_level1_when_delay_elapsed(client, monkeypatch) 
         assert _lead_message_count(str(payload["lead_id"])) == messages_before
         assert len(calls) == 1
         assert calls[0]["to"] == "+5491111111111"
+        assert "Podés seguir en el panel:" in calls[0]["text"]
+        assert f"cliente={phone.lstrip('+')}" in calls[0]["text"]
     finally:
         _cleanup_phone(phone)
         _cleanup_config(cliente)
@@ -320,6 +322,8 @@ def test_followup_evaluate_sends_level2_after_level1_elapsed(client, monkeypatch
         assert cycle["level2_sent_at"] is not None
         assert len(calls) == 1
         assert calls[0]["to"] == "+5491222222222"
+        assert "Podés seguir en el panel:" in calls[0]["text"]
+        assert f"cliente={phone.lstrip('+')}" in calls[0]["text"]
     finally:
         _cleanup_phone(phone)
         _cleanup_config(cliente)

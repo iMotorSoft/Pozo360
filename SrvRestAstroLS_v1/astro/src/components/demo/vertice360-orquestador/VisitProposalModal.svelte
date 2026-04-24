@@ -1,4 +1,6 @@
 <script>
+  import { tick } from "svelte";
+
   let {
     open = false,
     cliente = "",
@@ -25,6 +27,7 @@
   let opcion3 = $state(DEFAULTS.option3);
   let mensaje = $state("Hola, te comparto opciones para coordinar una visita.");
   let submitting = $state(false);
+  let dialogEl = $state(null);
 
   const getModeConfig = (currentMode) => {
     if (currentMode === "ver_propuesta") {
@@ -65,9 +68,33 @@
     submitting = false;
   });
 
+  $effect(() => {
+    const dialog = dialogEl;
+    if (!dialog) return;
+
+    if (open) {
+      void tick().then(() => {
+        if (!dialog.open) {
+          dialog.showModal();
+        }
+      });
+      return;
+    }
+
+    if (dialog.open) {
+      dialog.close();
+    }
+  });
+
   const handleClose = () => {
     if (submitting) return;
     onClose();
+  };
+
+  const handleDialogClose = () => {
+    if (open) {
+      onClose();
+    }
   };
 
   const handleSend = async () => {
@@ -90,8 +117,10 @@
 </script>
 
 <dialog
+  bind:this={dialogEl}
   class={`modal ${open ? "modal-open" : ""}`}
   aria-label="Proponer visita"
+  onclose={handleDialogClose}
 >
   <div
     class="modal-box h-screen w-screen max-w-none rounded-none p-4 md:p-6 md:h-auto md:w-11/12 md:max-w-xl md:rounded-2xl relative space-y-4 overflow-y-auto"

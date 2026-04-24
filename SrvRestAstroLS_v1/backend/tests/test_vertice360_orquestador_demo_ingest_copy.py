@@ -3203,7 +3203,7 @@ def test_time_preference_pending_question_morning(monkeypatch) -> None:
     second = asyncio.run(
         services.ingest_from_provider(
             user_phone="+5491130946950",
-            text="mañana",
+            text="la mañana",
             provider="gupshup_whatsapp",
             provider_message_id="gs-in-time-morning-2",
         )
@@ -3212,7 +3212,7 @@ def test_time_preference_pending_question_morning(monkeypatch) -> None:
     summary = state["ticket"].get("summary_jsonb") or {}
     assert first["vera_reply_variant"] == "visit_requested"
     assert second["vera_reply_variant"] == "visit_time_preference"
-    assert "por la mañana" in second["vera_reply_text"].lower()
+    assert "preferencia de mañana" in second["vera_reply_text"].lower()
     assert "sobre qué proyecto" not in second["vera_reply_text"].lower()
     assert summary.get("time_preference") == "morning"
     assert summary.get("pending_question_type") is None
@@ -3253,7 +3253,7 @@ def test_time_preference_pending_question_afternoon(monkeypatch) -> None:
 
     summary = state["ticket"].get("summary_jsonb") or {}
     assert payload["vera_reply_variant"] == "visit_time_preference"
-    assert "por la tarde" in payload["vera_reply_text"].lower()
+    assert "preferencia de tarde" in payload["vera_reply_text"].lower()
     assert summary.get("time_preference") == "afternoon"
 
 
@@ -3293,7 +3293,7 @@ def test_time_preference_pending_question_any_variants(monkeypatch, text: str) -
 
     summary = state["ticket"].get("summary_jsonb") or {}
     assert payload["vera_reply_variant"] == "visit_time_preference"
-    assert "cualquier franja" in payload["vera_reply_text"].lower()
+    assert "sin restricción de horario" in payload["vera_reply_text"].lower()
     assert summary.get("time_preference") == "any"
     assert summary.get("pending_question_type") is None
 
@@ -3371,6 +3371,552 @@ def test_time_preference_clears_pending_question(monkeypatch) -> None:
     assert summary_after_second.get("pending_question_type") is None
     assert summary_after_second.get("time_preference") == "afternoon"
 
+
+def test_visit_time_question_por_la_tarde_maps_to_afternoon(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-time-por-la-tarde-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-por-la-tarde-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="por la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-por-la-tarde-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "preferencia de tarde" in payload["vera_reply_text"].lower()
+    assert "sol de tarde" not in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "afternoon"
+    assert summary.get("pending_question_type") is None
+
+def test_visit_time_question_exact_manana_maps_to_morning_not_tomorrow(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-time-manana-exact-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-manana-exact-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-manana-exact-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "preferencia de mañana" in payload["vera_reply_text"].lower()
+    assert "para mañana" not in payload["vera_reply_text"].lower()
+    assert "sol de mañana" not in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "morning"
+    assert summary.get("date_hint") is None
+    assert summary.get("pending_question_type") is None
+
+def test_visit_time_question_any_supported(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-time-any-supported-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-any-supported-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="me da igual",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-any-supported-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "sin restricción de horario" in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "any"
+    assert summary.get("pending_question_type") is None
+
+def test_visit_time_question_prefiero_por_la_manana_updates_preference(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-time-update-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-update-1",
+        )
+    )
+    first_reply = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="por la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-update-2",
+        )
+    )
+    second_reply = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="prefiero por la mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-update-3",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert first_reply["vera_reply_variant"] == "visit_time_preference"
+    assert second_reply["vera_reply_variant"] == "visit_time_preference"
+    assert "preferencia de mañana" in second_reply["vera_reply_text"].lower()
+    assert "sol de mañana" not in second_reply["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "morning"
+    assert summary.get("date_hint") is None
+    assert summary.get("pending_question_type") is None
+
+def test_visit_preference_weekday_not_interpreted_as_project_intent(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-weekday-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-weekday-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="martes",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-weekday-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "martes" in payload["vera_reply_text"].lower()
+    assert "sobre qué proyecto" not in payload["vera_reply_text"].lower()
+    assert summary.get("day_preference") == "tuesday"
+    assert summary.get("pending_question_type") is None
+
+
+def test_visit_preference_relative_day_pasado_manana_supported(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-relative-day-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-relative-day-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="pasado mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-relative-day-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "pasado mañana" in payload["vera_reply_text"].lower()
+    assert "sol de mañana" not in payload["vera_reply_text"].lower()
+    assert summary.get("date_hint") == "day_after_tomorrow"
+    assert summary.get("pending_question_type") is None
+
+def test_visit_preference_specific_time_after_18(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-after-18-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-after-18-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="después de las 18",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-after-18-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "después de las 18 hs" in payload["vera_reply_text"].lower()
+    assert summary.get("time_hint") == "después de las 18 hs"
+    assert summary.get("pending_question_type") is None
+
+
+def test_visit_preference_flexible_supported(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-flexible-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-flexible-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="me adapto",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-flexible-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "lo dejo flexible" in payload["vera_reply_text"].lower()
+    assert summary.get("availability_flexibility") == "flexible"
+    assert summary.get("pending_question_type") is None
+
+
+def test_visit_preference_combined_day_and_time_supported(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-combined-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-combined-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="martes a la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-combined-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "martes por la tarde" in payload["vera_reply_text"].lower()
+    assert summary.get("day_preference") == "tuesday"
+    assert summary.get("time_preference") == "afternoon"
+    assert summary.get("pending_question_type") is None
+
+
+def test_visit_preference_update_overwrites_previous_value(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-overwrite-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-overwrite-1",
+        )
+    )
+    first_reply = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="martes",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-overwrite-2",
+        )
+    )
+    second_reply = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="mejor jueves",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-overwrite-3",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert first_reply["vera_reply_variant"] == "visit_time_preference"
+    assert second_reply["vera_reply_variant"] == "visit_time_preference"
+    assert "jueves" in second_reply["vera_reply_text"].lower()
+    assert summary.get("day_preference") == "thursday"
+    assert summary.get("pending_question_type") is None
+
+
+def test_single_output_for_visit_availability_followups(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+    send_calls: list[str] = []
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        send_calls.append(text)
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-availability-single-{len(send_calls)}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-availability-single-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="martes a la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-availability-single-2",
+        )
+    )
+
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert len(send_calls) == 2
+    assert len([row for row in state["messages"] if row.get("direction") == "out"]) == 2
+    assert "sol de tarde" not in payload["vera_reply_text"].lower()
+
+
+def test_real_sun_question_still_works_without_pending_visit_question(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": "gs-out-real-sun-question",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="tiene sol de mañana?",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-real-sun-question",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] != "visit_time_preference"
+    assert "sol de mañana" in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") is None
+    assert summary.get("pending_question_type") is None
+
+
+def test_single_output_for_visit_time_correction(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+    send_calls: list[str] = []
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        send_calls.append(text)
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-time-single-output-{len(send_calls)}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-single-output-1",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-single-output-2",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="prefiero por la mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-time-single-output-3",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert len(send_calls) == 3
+    assert len([row for row in state["messages"] if row.get("direction") == "out"]) == 3
+    assert "sol de mañana" not in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "morning"
+    assert summary.get("date_hint") is None
 
 def test_time_preference_no_double_output(monkeypatch) -> None:
     state = _wire_repo_stubs(
@@ -3461,6 +4007,569 @@ def test_visit_request_after_price_does_not_fallback_to_overview(monkeypatch) ->
     assert "orq.visit.requested" in event_names
     summary = state["ticket"].get("summary_jsonb") or {}
     assert summary.get("last_intent") == "visit_request"
+
+
+def test_visit_request_without_selected_project_asks_project_first(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code=None,
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": "gs-out-visit-no-project-1",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-no-project-1",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "ask_project_for_visit"
+    assert payload["stage"] == "Nuevo"
+    assert "para cuál proyecto querés coordinar la visita" in payload["vera_reply_text"].lower()
+    assert "pendiente de visita" not in payload["vera_reply_text"].lower()
+    assert summary.get("pending_question_type") == "VISIT_PROJECT_SELECTION"
+    assert summary.get("selected_project") in ({}, None)
+
+
+def test_visit_request_without_project_does_not_open_pending_visit(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code=None,
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": "gs-out-visit-no-project-2",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-no-project-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    event_names = [event.get("name") for event in state["events"]]
+    assert state["ticket"]["stage"] == "Nuevo"
+    assert "orq.stage.updated" not in event_names
+    assert "orq.visit.requested" not in event_names
+    assert summary.get("visit_request_open") is not True
+    assert summary.get("active_visit_project_code") in (None, "")
+
+
+def test_visit_request_then_project_selection_opens_visit(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code=None,
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-select-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-select-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="3277",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-select-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    event_names = [event.get("name") for event in state["events"]]
+    assert payload["vera_reply_variant"] == "visit_requested"
+    assert payload["stage"] == "Pendiente de visita"
+    assert "manzanares 3277" in payload["vera_reply_text"].lower()
+    assert "mañana o por la tarde" in payload["vera_reply_text"].lower()
+    assert "orq.stage.updated" in event_names
+    assert "orq.visit.requested" in event_names
+    assert summary.get("selected_project", {}).get("code") == "MANZANARES_3277"
+    assert summary.get("active_visit_project_code") == "MANZANARES_3277"
+    assert summary.get("visit_request_open") is True
+    assert summary.get("pending_question_type") == "TIME_PREFERENCE"
+
+
+def test_visit_request_with_existing_selected_project_still_opens_directly(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="GDR_3760_SAAVEDRA",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": "gs-out-visit-existing-project-1",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-existing-project-1",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_requested"
+    assert payload["stage"] == "Pendiente de visita"
+    assert "gdr 3760" in payload["vera_reply_text"].lower()
+    assert summary.get("active_visit_project_code") == "GDR_3760_SAAVEDRA"
+    assert summary.get("pending_question_type") == "TIME_PREFERENCE"
+
+
+def test_single_output_for_visit_request_without_project(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code=None,
+    )
+    send_calls: list[str] = []
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        send_calls.append(text)
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-no-project-single-{len(send_calls)}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-no-project-single-1",
+        )
+    )
+
+    assert payload["vera_reply_variant"] == "ask_project_for_visit"
+    assert len(send_calls) == 1
+    assert len([row for row in state["messages"] if row.get("direction") == "out"]) == 1
+
+
+
+def test_visit_request_is_bound_to_selected_project(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="GDR_3760_SAAVEDRA",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-bound-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero visitarlo",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-bound-1",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_requested"
+    assert "gdr 3760" in payload["vera_reply_text"].lower()
+    assert summary.get("active_visit_project_code") == "GDR_3760_SAAVEDRA"
+    assert summary.get("visit_request_open") is True
+    assert summary.get("pending_question_type") == "TIME_PREFERENCE"
+
+
+
+def test_switching_project_opens_or_updates_visit_for_new_project(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="GDR_3760_SAAVEDRA",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-switch-visit-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero visitarlo",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-switch-visit-1",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="por la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-switch-visit-2",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="Manzanares 3277",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-switch-visit-3",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="precios",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-switch-visit-4",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero verlo",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-switch-visit-5",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_requested"
+    assert "manzanares 3277" in payload["vera_reply_text"].lower()
+    assert summary.get("active_visit_project_code") == "MANZANARES_3277"
+    assert summary.get("time_preference") is None
+    assert summary.get("availability_flexibility") is None
+    assert summary.get("pending_question_type") == "TIME_PREFERENCE"
+
+
+
+def test_options_puntuales_keeps_selected_project(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-options-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="precios",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-options-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="opciones puntuales",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-options-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    selected_project = summary.get("selected_project") or {}
+    assert payload["vera_reply_variant"] == "project_unit_options"
+    assert "manzanares 3277" in payload["vera_reply_text"].lower()
+    assert "sobre qué proyecto" not in payload["vera_reply_text"].lower()
+    assert selected_project.get("code") == "MANZANARES_3277"
+
+
+
+def test_visit_open_any_schedule_not_interpreted_as_available_units(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-any-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-any-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="disponible todo horario",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-any-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "sin restricción de horario" in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "any"
+    assert summary.get("availability_flexibility") == "any"
+
+
+
+def test_visit_open_prefiero_visitar_por_la_tarde_not_interpreted_as_sun(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-tarde-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero una visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-tarde-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="prefiero visitar por la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-tarde-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "preferencia de tarde" in payload["vera_reply_text"].lower()
+    assert "sol de tarde" not in payload["vera_reply_text"].lower()
+    assert summary.get("time_preference") == "afternoon"
+
+
+
+def test_visit_repeated_intent_does_not_restart_flow_incorrectly(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="MANZANARES_3277",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-repeat-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-repeat-1",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero verlo",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-repeat-2",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_requested"
+    assert "ya tengo abierta la solicitud de visita" in payload["vera_reply_text"].lower()
+    assert "pendiente de visita" not in payload["vera_reply_text"].lower()
+    assert summary.get("active_visit_project_code") == "MANZANARES_3277"
+    assert summary.get("pending_question_type") == "TIME_PREFERENCE"
+
+
+
+def test_visit_time_preference_updates_current_project_visit(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="GDR_3760_SAAVEDRA",
+    )
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-current-project-{len(state['messages'])}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="visita",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-current-project-1",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="por la tarde",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-current-project-2",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="Manzanares 3277",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-current-project-3",
+        )
+    )
+    asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="quiero verlo",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-current-project-4",
+        )
+    )
+    payload = asyncio.run(
+        services.ingest_from_provider(
+            user_phone="+5491130946950",
+            text="por la mañana",
+            provider="gupshup_whatsapp",
+            provider_message_id="gs-in-visit-current-project-5",
+        )
+    )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert payload["vera_reply_variant"] == "visit_time_preference"
+    assert "preferencia de mañana" in payload["vera_reply_text"].lower()
+    assert summary.get("active_visit_project_code") == "MANZANARES_3277"
+    assert summary.get("time_preference") == "morning"
+    assert summary.get("availability_flexibility") is None
+
+
+
+def test_single_output_for_multi_project_visit_flow(monkeypatch) -> None:
+    state = _wire_repo_stubs(
+        monkeypatch,
+        existing_contact=True,
+        initial_project_code="GDR_3760_SAAVEDRA",
+    )
+    send_calls: list[str] = []
+
+    async def fake_send(phone_e164: str, text: str):  # noqa: ARG001
+        send_calls.append(text)
+        return {
+            "provider": "gupshup_whatsapp",
+            "vera_send_ok": True,
+            "provider_message_id": f"gs-out-visit-multiproject-{len(send_calls)}",
+        }
+
+    monkeypatch.setattr(services, "_send_vera_whatsapp_reply", fake_send)
+
+    for idx, text in enumerate(
+        [
+            "puedo visitarlo",
+            "cualquier horario",
+            "Manzanares 3277",
+            "precios",
+            "opciones puntuales",
+            "quiero verlo",
+            "todo disponible",
+            "prefiero visitar por la tarde",
+        ],
+        start=1,
+    ):
+        asyncio.run(
+            services.ingest_from_provider(
+                user_phone="+5491130946950",
+                text=text,
+                provider="gupshup_whatsapp",
+                provider_message_id=f"gs-in-visit-multiproject-{idx}",
+            )
+        )
+
+    summary = state["ticket"].get("summary_jsonb") or {}
+    assert len(send_calls) == 8
+    assert len([row for row in state["messages"] if row.get("direction") == "out"]) == 8
+    assert summary.get("active_visit_project_code") == "MANZANARES_3277"
+    assert summary.get("time_preference") == "afternoon"
+    assert summary.get("availability_flexibility") is None
+    assert summary.get("selected_project", {}).get("code") == "MANZANARES_3277"
 
 
 def test_after_human_schedule_vera_can_follow_up(monkeypatch) -> None:

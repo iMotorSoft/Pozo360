@@ -1,0 +1,122 @@
+Objetivo: Crear una infografía ejecutiva en formato SVG, tamaño A4 vertical, sobre Vertice360 Orquestador.
+
+Ruta de salida:
+- /media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/backend/docs
+
+Nombre sugerido:
+- vertice360_orquestador_infografia_a4.svg
+
+Restricciones:
+- No tocar frontend
+- No tocar backend
+- No modificar lógica
+- No cambiar DB schema
+- Solo crear o reemplazar el archivo SVG
+- Debe quedar listo para exportar después a PNG de alta resolución
+- Debe usar SVG puro, editable
+- Mantener estilo ejecutivo, claro y profesional
+- Evitar look técnico recargado
+- Priorizar buena lectura en impresión y también en celular
+
+Formato:
+- A4 vertical
+- Canvas recomendado: 2480 x 3508
+- SVG con layout limpio, jerarquía visual fuerte y tipografía legible
+- Debe verse bien sobre fondo claro
+- Debe tener bloques visuales bien separados
+- Puede usar tarjetas, líneas, círculos, gradientes sutiles y sombras suaves
+- No usar colores estridentes ni estética infantil
+- Tono visual: ejecutivo, moderno, sobrio
+
+Texto principal de cabecera:
+- Título: Vertice360 Orquestador
+- Bajada: Orquestá tus leads por WhatsApp, automatizá el seguimiento y tené control total: del anuncio al cierre.
+
+Estructura deseada de la infografía:
+
+1. Cabecera
+- título grande
+- bajada ejecutiva
+- 2 o 3 chips visuales cortos, por ejemplo:
+  - WhatsApp + tablero
+  - Visitas y follow-up
+  - Demo operable
+
+2. Bloque “Qué es”
+Explicar en pocas líneas que Vertice360 combina:
+- conversación por WhatsApp
+- contexto comercial de proyectos/unidades
+- coordinación operativa de visitas
+- seguimiento interno automatizado
+
+3. Bloque “Flujo punta a punta”
+Mostrar un flujo vertical de 5 pasos:
+- Lead entra por WhatsApp
+- Selecciona proyecto / consulta producto
+- Solicita visita
+- Refina horario de visita
+- Escalamiento interno / follow-up
+
+Cada paso debe tener:
+- número
+- título corto
+- una línea explicativa breve
+
+4. Bloque “Capas del sistema”
+Mostrar stack resumido:
+- Canal: WhatsApp / Gupshup
+- Orquestación: backend Litestar
+- Lógica: intents, contexto, visitas, pending questions, follow-up
+- Datos: proyectos, unidades, tickets, runtime, visit_followup_config
+
+5. Bloque “Operación demo”
+Incluir visualmente que la demo es operable con:
+- reset runtime
+- set config celulares
+- evaluate general
+- dashboard / trazabilidad
+
+6. Bloque “Valor de negocio”
+Mostrar 3 puntos ejecutivos:
+- menos fricción comercial
+- mejor trazabilidad de visitas
+- coordinación real con escalamiento interno
+
+7. Bloque “Estado validado”
+Incluir checks cortos tipo:
+- selección de proyecto estable
+- visita ligada al proyecto actual
+- no se abre visita sin proyecto claro
+- preferencia horaria contextual
+- opciones puntuales mantiene proyecto
+- follow-up interno validado: advisor y supervisor
+
+8. Pie
+- texto corto tipo:
+  - Vertice360 Orquestador | Infografía ejecutiva A4
+- fecha opcional
+
+Lineamientos de contenido:
+- Mantener frases cortas
+- No meter teoría innecesaria
+- No hacer párrafos largos
+- La pieza debe comunicar rápidamente qué hace el sistema, cómo opera y qué está validado
+- Debe reflejar el estado actual del proyecto real
+- Debe mencionar explícitamente que:
+  - la visita no se abre sin proyecto claro
+  - el refinamiento horario de visita se interpreta como agenda y no como sol/luz
+  - el follow-up interno ya fue validado con advisor y supervisor
+
+Lineamientos visuales:
+- Fondo claro con acentos sobrios
+- Cabecera fuerte
+- Centro con flujo principal bien dominante
+- Laterales con stack y operación
+- Abajo con validaciones y estado actual
+- Cuidar márgenes y balance visual
+- Que sea elegante y presentable ante cliente o dirección
+
+Entregable:
+- Crear el archivo SVG en la carpeta indicada
+- Confirmar ruta exacta
+- Resumir en 2 o 3 líneas qué contiene

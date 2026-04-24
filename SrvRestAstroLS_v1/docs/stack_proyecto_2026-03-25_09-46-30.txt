@@ -1,0 +1,95 @@
+Fecha y hora: 2026-03-25 09:46:30 -03:00
+
+
+• Resumen Ejecutivo
+
+  Tu stack tiene un diferencial claro: no es solo backend + frontend, sino
+  backend + frontend + AG-UI + workflows AI en tiempo real. Ese punto es el más
+  importante para evaluar qué modelos de AI te convienen.
+
+  Backend
+
+  - Python 3.12 + Litestar + Uvicorn como base del servicio (backend/
+    pyproject.toml:1, backend/ls_iMotorSoft_Srv01.py:1).
+  - OpenAI + LangGraph + LangChain ya integrados para workflows de AI (backend/
+    pyproject.toml:13, backend/modules/vertice360_ai_workflow_demo/
+    langgraph_flow.py:21).
+  - PostgreSQL con psycopg y pool para persistencia y operación transaccional
+    (backend/modules/vertice360_orquestador_demo/db.py:44).
+  - Integración real con WhatsApp, tanto Meta como Gupshup, no solo mock
+    (backend/routes/messaging.py:89, backend/modules/messaging/providers/
+    gupshup/whatsapp/client.py:47).
+  - Arquitectura híbrida: lógica determinística + LLM + fallback seguro si el
+    modelo falla o no hay API key (backend/modules/vertice360_ai_workflow_demo/
+    llm_service.py:13, backend/tests/test_ai_workflow_llm_fallback.py:7).
+
+  Frontend
+
+  - Astro 5 + Svelte 5 + TypeScript + Tailwind + DaisyUI (astro/package.json:1).
+  - UI modular con demos, shells operativos y paneles en vivo (astro/src/
+    layouts/BaseLayout.astro:10, astro/src/lib/vertice360_workflow/ui/
+    Vertice360WorkflowApp.svelte:44).
+  - Estado reactivo moderno con Svelte runes ($state) (astro/src/lib/crm/
+    state.svelte.js:15).
+  - Cliente frontend ya preparado para consumir APIs y eventos en tiempo real.
+
+  AG-UI
+
+  - Es una pieza central, no secundaria.
+  - En backend tienes un stream global AG-UI por SSE en /api/agui/stream con
+    handshake, heartbeat y broadcast (backend/modules/agui_stream/routes.py:39).
+  - Los eventos de negocio, especialmente mensajería/workflow, se emiten hacia
+    ese canal (backend/routes/messaging.py:151).
+  - En frontend tienes una capa compartida para reconexión SSE con backoff
+    (astro/src/lib/shared/sse.js:32).
+  - Módulos como el orquestador y el workflow viven sobre ese stream en tiempo
+    real (astro/src/components/global.js:16, astro/src/components/demo/
+    vertice360-orquestador/OrquestadorAppLive.svelte:67, astro/src/lib/
+    vertice360_workflow/ui/Vertice360WorkflowApp.svelte:15).
+
+
+
+STACK DEL PROYECTO
+
+Backend
+- Python 3.12
+- Litestar
+- Uvicorn
+- Pydantic
+- JSONSchema
+- HTTPX
+- PostgreSQL
+- psycopg
+- psycopg-pool
+- OpenAI SDK
+- LangGraph
+- LangChain
+- LangChain OpenAI
+- Pytest
+
+Frontend
+- Astro 5
+- Svelte 5
+- TypeScript
+- Tailwind CSS
+- DaisyUI
+- PostCSS
+- Autoprefixer
+
+Tiempo real / AG-UI
+- SSE global en /api/agui/stream
+- Broadcast de eventos AG-UI
+- Reconexion con backoff en frontend
+
+Integraciones y modulos destacados
+- WhatsApp Meta
+- WhatsApp Gupshup
+- Orquestador Vertice360
+- AI Workflow Studio
+- Workflow demo en tiempo real
+- CRM demo
+
+Arquitectura
+- Backend modular por routes, modules, services, middleware, models y db
+- Frontend modular por pages, components y lib
+- Flujos hibridos: logica deterministica + LLM + fallback

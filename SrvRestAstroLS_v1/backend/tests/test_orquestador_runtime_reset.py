@@ -198,6 +198,27 @@ def test_reset_runtime_phone_deletes_only_target_runtime_and_keeps_protected_dat
         _cleanup_config(cliente)
 
 
+def test_reset_runtime_phone_returns_noop_metadata_when_phone_is_not_found(client, monkeypatch) -> None:
+    headers = _headers(monkeypatch, env="prod")
+    missing_phone = _unique_phone()
+
+    response = client.post(
+        "/api/demo/vertice360-orquestador/admin/reset_runtime_phone",
+        json={"phone": missing_phone},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "phone"
+    assert payload["phone"] == missing_phone
+    assert payload["deleted_total"] == 0
+    assert payload["matched_runtime"] is False
+    assert payload["message"] == "No runtime found for that lead phone."
+    assert all(value == 0 for value in payload["deleted"].values())
+
+
 def test_reset_runtime_all_deletes_runtime_and_keeps_protected_data(client, monkeypatch) -> None:
     baseline_runtime = _global_runtime_counts()
     if any(value != 0 for value in baseline_runtime.values()):

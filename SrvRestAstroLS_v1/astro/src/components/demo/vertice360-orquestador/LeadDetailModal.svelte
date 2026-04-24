@@ -174,6 +174,7 @@
   let recipientTarget = $state("client");
   let conversation = $state([]);
   let conversationViewport;
+  let dialogEl = $state(null);
 
   const recipientOptions = (row) => {
     const advisor = getAdvisor(row);
@@ -218,6 +219,24 @@
     );
   });
 
+  $effect(() => {
+    const dialog = dialogEl;
+    if (!dialog) return;
+
+    if (open) {
+      void tick().then(() => {
+        if (!dialog.open) {
+          dialog.showModal();
+        }
+      });
+      return;
+    }
+
+    if (dialog.open) {
+      dialog.close();
+    }
+  });
+
   const appendSupervisorMessage = async () => {
     const trimmed = draftMessage.trim();
     if (!trimmed || !lead || supervisorSending) return;
@@ -257,11 +276,19 @@
   const handleClose = () => {
     onClose();
   };
+
+  const handleDialogClose = () => {
+    if (open) {
+      onClose();
+    }
+  };
 </script>
 
 <dialog
+  bind:this={dialogEl}
   class={`modal ${open ? "modal-open" : ""}`}
   aria-label="Detalle de lead"
+  onclose={handleDialogClose}
 >
   <div
     class="modal-box h-screen w-screen max-w-none rounded-none p-0 md:h-[92vh] md:w-full

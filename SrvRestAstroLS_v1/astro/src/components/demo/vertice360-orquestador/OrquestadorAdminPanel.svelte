@@ -80,13 +80,56 @@
     updatedBy = String(payload?.updated_by || DEFAULT_UPDATED_BY).trim() || DEFAULT_UPDATED_BY;
   };
 
+  const summarizeEvaluateAction = (action) => {
+    const verb = String(action?.action || "").trim();
+    const ticket = String(action?.ticket_id || "").trim();
+    const statusAfter = String(action?.status_after || "").trim();
+    const targetPhone = String(action?.target_phone || "").trim();
+
+    if (verb === "sent_level1" || verb === "sent_level2") {
+      const targetSuffix = targetPhone ? ` a ${targetPhone}` : "";
+      return `${verb}${targetSuffix}${ticket ? ` (${ticket})` : ""}`;
+    }
+
+    if (verb === "no_action") {
+      const statusSuffix = statusAfter ? ` en estado ${statusAfter}` : "";
+      return `sin acción${statusSuffix}${ticket ? ` (${ticket})` : ""}`;
+    }
+
+    if (verb.startsWith("closed_")) {
+      return `${verb}${ticket ? ` (${ticket})` : ""}`;
+    }
+
+    if (verb === "created_cycle") {
+      return `ciclo creado${ticket ? ` (${ticket})` : ""}`;
+    }
+
+    return verb || "sin detalle";
+  };
+
+  const summarizeEvaluateResult = (payload, fallbackLabel) => {
+    const evaluatedCount = Number(payload?.evaluated_count || 0);
+    const actions = Array.isArray(payload?.actions) ? payload.actions : [];
+
+    if (evaluatedCount <= 0 || actions.length === 0) {
+      return `${fallbackLabel}: sin candidatos para evaluar.`;
+    }
+
+    const summary = actions.slice(0, 3).map(summarizeEvaluateAction).join(" | ");
+    return `${fallbackLabel}: ${summary}`;
+  };
+
   const runAction = async (action, runner, successMessage) => {
     busyAction = action;
     notice = "";
     errorMessage = "";
     try {
       const payload = await runner();
-      setResult(action, payload, successMessage);
+      const resolvedSuccessMessage =
+        typeof successMessage === "function"
+          ? successMessage(payload)
+          : successMessage;
+      setResult(action, payload, resolvedSuccessMessage);
       return payload;
     } catch (err) {
       lastAction = action;
@@ -147,7 +190,7 @@
           },
           { adminToken: ensureToken() },
         ),
-      "Evaluate general ejecutado.",
+      (payload) => summarizeEvaluateResult(payload, "Evaluate general"),
     );
 
   const evaluateTicket = async () =>
@@ -165,7 +208,7 @@
           { adminToken: ensureToken() },
         );
       },
-      "Evaluate por ticket ejecutado.",
+      (payload) => summarizeEvaluateResult(payload, "Evaluate por ticket"),
     );
 
   const runResetPhone = async () =>
@@ -180,7 +223,18 @@
           { adminToken: ensureToken() },
         );
       },
-      "Runtime por teléfono limpiado.",
+      (payload) => {
+        const deletedTotal =
+          Number(payload?.deleted_total ?? NaN) ||
+          Object.values(payload?.deleted || {}).reduce(
+            (total, value) => total + Number(value || 0),
+            0,
+          );
+        if (deletedTotal <= 0) {
+          return "No se encontró runtime para ese teléfono. Verificá que sea el lead phone real, no advisor/supervisor.";
+        }
+        return `Runtime por teléfono limpiado (${deletedTotal} registros).`;
+      },
     );
 
   const runResetAll = async () => {
@@ -204,7 +258,18 @@
   onMount(() => {
     if (typeof window === "undefined") return;
     adminToken = window.sessionStorage.getItem(TOKEN_STORAGE_KEY) || "";
-    resetPhone = normalizePhone(initialPhone);
+
+    const params = new URLSearchParams(window.location.search);
+    const queryCliente = String(params.get("cliente") || "").trim();
+    const queryPhone = String(params.get("phone") || "").trim();
+
+    if (queryCliente) {
+      cliente = queryCliente;
+    } else {
+      cliente = String(initialCliente || "").trim() || DEFAULT_CLIENTE;
+    }
+
+    resetPhone = normalizePhone(queryPhone || initialPhone);
   });
 </script>
 
@@ -378,6 +443,9 @@
             <div class="mb-3">
               <h3 class="font-semibold text-slate-900">Limpieza Runtime</h3>
               <p class="text-sm text-slate-500">Usa el teléfono lead cargado arriba.</p>
+              <p class="mt-1 text-xs text-slate-500">
+                Si devuelve todo en cero, ese número no coincide con un lead runtime activo.
+              </p>
             </div>
             <div class="flex flex-wrap gap-3">
               <button class="btn btn-secondary" onclick={runResetPhone} disabled={busyAction !== ""}>
@@ -433,7 +501,7 @@
         <h2 class="mb-3 text-lg font-semibold text-slate-900">Notas Operativas</h2>
         <ul class="space-y-3 text-sm text-slate-600">
           <li><strong>`cliente`</strong> se usa para follow-up config y evaluate.</li>
-          <li><strong>`reset_runtime_phone`</strong> usa el teléfono lead, no el cliente lógico.</li>
+          <li><strong>`reset_runtime_phone`</strong> usa el teléfono lead exacto, no el cliente lógico ni el interno advisor/supervisor.</li>
           <li><strong>`target_phone`</strong> es el destino real del follow-up interno.</li>
           <li><strong>`target_matches_lead`</strong> ayuda a detectar cuando el interno coincide con el lead.</li>
           <li><strong>`submitted`</strong> es aceptación del provider, no entrega final al dispositivo.</li>

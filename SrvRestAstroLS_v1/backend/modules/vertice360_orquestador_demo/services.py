@@ -548,17 +548,35 @@ def _render_followup_message(template: str, *, ticket_id: str, context: dict[str
     return str(template).format_map(values).strip()
 
 
+def _append_followup_panel_link(message: str, *, board_url: str | None) -> str:
+    clean_message = str(message or '').strip()
+    clean_board_url = str(board_url or '').strip()
+    if not clean_board_url:
+        return clean_message
+    if clean_board_url in clean_message:
+        return clean_message
+    suffix = f"Podés seguir en el panel:\n{clean_board_url}"
+    if not clean_message:
+        return suffix
+    return f"{clean_message}\n\n{suffix}"
+
+
 def _followup_message_for_level(level: int, *, config: dict[str, Any], ticket_id: str, context: dict[str, Any]) -> str:
     if level == 1:
         template = str(config.get('level1_template') or FOLLOWUP_LEVEL1_DEFAULT_TEMPLATE)
     else:
         template = str(config.get('level2_template') or FOLLOWUP_LEVEL2_DEFAULT_TEMPLATE)
-    return _render_followup_message(
+    board_url = _build_followup_board_url(
+        str(context.get('lead_phone') or context.get('phone_e164') or '').strip() or None,
+        str(config.get('board_base_url') or '').strip() or None,
+    )
+    message = _render_followup_message(
         template,
         ticket_id=ticket_id,
         context=context,
         board_base_url=str(config.get('board_base_url') or '').strip() or None,
     )
+    return _append_followup_panel_link(message, board_url=board_url)
 
 
 def _followup_recipient_for_level(level: int, config: dict[str, Any]) -> str | None:
@@ -2332,6 +2350,8 @@ def _semantic_intent_resolver(
         chosen_project_code=chosen_project_code,
     ) or {}
     feature_key = _extract_feature_key(text)
+    if feature_key and _looks_like_unit_feature_query(text, feature_key):
+        project_metric_value_request = {}
     project_comparison_override = bool(project_comparison_request or project_metric_followup_request)
     candidate_unit_code = _extract_candidate_unit_code(text)
     last_unit_subject = _last_unit_subject(summary_obj)
@@ -8613,12 +8633,20 @@ def admin_reset_runtime_phone(*, phone: str) -> dict[str, Any]:
 
     def _tx(conn: Any) -> dict[str, Any]:
         deleted = repo.reset_by_phone(conn, normalized_phone)
+        deleted_total = sum(int(value or 0) for value in deleted.values())
         affected_tables = list(deleted.keys())
         return {
             "ok": True,
             "mode": "phone",
             "phone": normalized_phone,
             "deleted": deleted,
+            "deleted_total": deleted_total,
+            "matched_runtime": deleted_total > 0,
+            "message": (
+                "Runtime deleted for lead phone."
+                if deleted_total > 0
+                else "No runtime found for that lead phone."
+            ),
             "affected_tables": affected_tables,
             "protected_not_touched": repo.protected_reset_tables(),
         }
