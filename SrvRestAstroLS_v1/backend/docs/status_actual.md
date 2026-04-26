@@ -299,3 +299,60 @@
     - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/?cliente=59168912007`
 - Nota de seguridad:
   - no documentar contrasenas SSH ni tokens reales en archivos versionados.
+
+## Update 2026-04-26 2
+
+- Se implemento y publico en GitHub la infografia interactiva conceptual del orquestador:
+  - URL productiva:
+    - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/infografia/`
+  - commits:
+    - `00061dd Add interactive workflow infographic`
+    - `7e17cf4 Refine workflow infographic playback controls`
+- La infografia interactiva quedo separada de la home y de la app live:
+  - pagina Astro:
+    - `SrvRestAstroLS_v1/astro/src/pages/demo/vertice360-orquestador/infografia.astro`
+  - componente Svelte 5:
+    - `SrvRestAstroLS_v1/astro/src/components/demo/vertice360-orquestador/WorkflowInfographic.svelte`
+  - link agregado desde la home:
+    - `SrvRestAstroLS_v1/astro/src/components/demo/vertice360-orquestador/Landing.svelte`
+- Funcionalidad de la infografia interactiva:
+  - flujo automatico:
+    - `Empresa -> Municipio -> Organismo publico -> Empresa`
+  - pasos por caso:
+    - `Mensaje`
+    - `Nivel 1`
+    - `SLA`
+    - `Nivel 2`
+    - `Supervisor`
+  - boton pequeno `Pausa` / `Play` sobre la card `Caso de uso`
+  - click en un paso pausa la animacion
+  - click en un caso reinicia ese caso y vuelve al modo automatico
+- Deploy frontend realizado a produccion:
+  - build local:
+    - `pnpm -C /media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/astro build`
+  - resultado:
+    - `17 page(s) built`
+  - sync:
+    - origen: `/media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/astro/dist/`
+    - destino: `administrator@imotorsoft.com:/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/astro/dist/`
+  - validacion productiva:
+    - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/infografia/`
+    - `HTTP/1.1 200 OK`
+    - Playwright OK: carga heading principal, hidrata Svelte y el boton `Pausa` cambia a `Play`
+- Tambien se genero una version PNG mas grafica, sin modificar la infografia interactiva existente:
+  - PNG:
+    - `SrvRestAstroLS_v1/backend/docs/vertice360_workflow_infografia.png`
+  - pagina aislada para regenerar el poster:
+    - `SrvRestAstroLS_v1/astro/src/pages/demo/vertice360-orquestador/infografia-poster.astro`
+  - componente aislado:
+    - `SrvRestAstroLS_v1/astro/src/components/demo/vertice360-orquestador/WorkflowInfographicPoster.svelte`
+  - ruta local/export:
+    - `/demo/vertice360-orquestador/infografia-poster/`
+  - export realizado con Playwright en viewport `1920x1080`
+  - salida temporal usada:
+    - `/tmp/vertice360-workflow-infografia.png`
+  - copia guardada en repo:
+    - `docs/vertice360_workflow_infografia.png`
+- Importante:
+  - la version PNG/poster es una pieza aislada; no toca la home, la infografia interactiva, el backend ni la demo live.
+  - los archivos del PNG/poster aun no fueron commiteados ni subidos a GitHub en esta sesion.
