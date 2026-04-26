@@ -90,22 +90,25 @@ Contexto:
 Desde `SrvRestAstroLS_v1/astro`:
 
 ```bash
-npm ci
-npm run build
+pnpm build
 ```
 
 Salida esperada:
 - Carpeta `astro/dist/` generada.
 - Sin errores de compilacion.
 
+Nota:
+- En el deploy del 2026-04-26 se uso `pnpm`.
+- Si se cambia el gestor de paquetes, respetar el lockfile vigente del frontend.
+
 ## 4) Copia de frontend `dist` al servidor de produccion
 
-Definir placeholders (reemplazar):
+Destino productivo actual:
 
 ```bash
-export PROD_HOST="TU_HOST_PROD"
-export PROD_USER="TU_USUARIO"
-export PROD_FE_PATH="/var/www/vertice360"
+export PROD_HOST="imotorsoft.com"
+export PROD_USER="administrator"
+export PROD_FE_PATH="/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/astro/dist"
 ```
 
 ### Opcion recomendada: `rsync`
@@ -126,10 +129,12 @@ scp -r \
 
 ## 5) Copia de backend al servidor de produccion
 
-Definir path destino backend:
+Destino productivo actual:
 
 ```bash
-export PROD_BE_PATH="/opt/vertice360/backend"
+export PROD_HOST="imotorsoft.com"
+export PROD_USER="administrator"
+export PROD_BE_PATH="/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend"
 ```
 
 ### Opcion recomendada: `rsync` (sin basura local)
@@ -156,22 +161,53 @@ scp -r \
 Nota:
 - `scp` no borra archivos viejos en destino.
 - `rsync --delete` mantiene destino espejo.
+- No copiar `.venv` local al server.
+- Si aparece `cannot delete non-empty directory` sobre un modulo eliminado, revisar si quedaron archivos excluidos como `__pycache__`. Si el `rsync` termina con codigo `0`, el deploy no necesariamente fallo.
 
-## 6) Reinicio de servicios en produccion (manual)
+## 6) Reinicio del backend demo en produccion (`tmux`)
 
-Ejemplo (ajustar nombres reales):
+El backend demo de Vertice360 se opera manualmente en `tmux`.
+
+Sesion actual:
+- nombre de sesion: `v360 api`
+- path backend: `/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend`
+
+Entrar a la sesion:
 
 ```bash
 ssh ${PROD_USER}@${PROD_HOST}
-
-# backend
-sudo systemctl restart vertice360-backend
-sudo systemctl status vertice360-backend --no-pager
-
-# frontend (si se sirve por nginx)
-sudo systemctl reload nginx
-sudo systemctl status nginx --no-pager
+tmux attach -t "v360 api"
 ```
+
+Arrancar/reiniciar dentro del pane correcto:
+
+```bash
+cd /home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend
+source .venv/bin/activate
+VERTICE360_ENV=prod V360_ADMIN_TOKEN=v360-prod-token python  ls_iMotorSoft_Srv01_demo.py
+```
+
+Si se lanza desde fuera de `tmux`, se puede enviar el comando al pane:
+
+```bash
+ssh ${PROD_USER}@${PROD_HOST} \
+  "tmux send-keys -t 'v360 api:4' C-c; \
+   sleep 2; \
+   tmux send-keys -t 'v360 api:4' 'cd /home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend' C-m; \
+   tmux send-keys -t 'v360 api:4' 'source .venv/bin/activate' C-m; \
+   tmux send-keys -t 'v360 api:4' 'VERTICE360_ENV=prod V360_ADMIN_TOKEN=v360-prod-token python  ls_iMotorSoft_Srv01_demo.py' C-m"
+```
+
+Validar en el pane que aparezca:
+- `env=prod`
+- `host=0.0.0.0 port=7062`
+- `db_v360_valid=True`
+- `gupshup_enabled=True`
+- `Uvicorn running on http://0.0.0.0:7062`
+
+Nota:
+- Activar siempre `.venv` antes de levantar Python.
+- Si la UI muestra `HTTP 502`, revisar primero si el proceso Python quedo detenido en el pane.
 
 ## 7) Validaciones post-deploy
 
@@ -180,6 +216,8 @@ sudo systemctl status nginx --no-pager
 ```bash
 curl -fsS https://demo.vertice360.imotorsoft.com/health
 curl -fsS https://demo.vertice360.imotorsoft.com/version
+curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/bootstrap?cliente=59168912007"
+curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/dashboard?cliente=59168912007"
 ```
 
 Validar log de arranque:
@@ -190,24 +228,25 @@ Validar log de arranque:
 ## 7.2 Frontend
 
 Abrir en navegador:
-- `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/`
+- `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/?cliente=59168912007`
 
 Confirmar:
 - Carga landing.
 - Con `?cliente=...` abre app live.
 - SSE activa (badge Live/Reconexion y actualizacion de conversaciones).
+- Se carga el numero WhatsApp demo.
 
 ## 7.3 Endpoints live orquestador
 
 ```bash
-curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/bootstrap?cliente=5491100000000"
-curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/dashboard?cliente=5491100000000"
+curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/bootstrap?cliente=59168912007"
+curl -fsS "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orquestador/dashboard?cliente=59168912007"
 ```
 
 ## 8) Checklist corto de release
 
 - [ ] `global.js` en `URL_REST_PRO`.
-- [ ] `npm run build` OK.
+- [ ] `pnpm build` OK.
 - [ ] `~/.bashrc` de VM actualizado y recargado.
 - [ ] `DB_PG_V360_URL` apunta a DB `v360`.
 - [ ] Backend copiado (rsync/scp).
@@ -228,3 +267,4 @@ Cada vez que se actualice este documento, registrar:
 ## 10) Registro de cambios del documento
 
 - 2026-03-06 12:18:25 -03 (2026-03-06 15:18:26Z): creacion inicial.
+- 2026-04-26 11:10 -03 aprox: se agregaron paths reales de produccion, build con `pnpm`, sync con `rsync`, reinicio manual por `tmux` + `.venv`, y validaciones de la demo live.

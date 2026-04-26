@@ -48,6 +48,12 @@
         </svg>
         <span>Abrir WhatsApp</span>
       </a>
+      <a
+        href="/demo/vertice360-orquestador/infografia/"
+        class="inline-flex h-10 items-center justify-center rounded-full border border-emerald-700 px-4 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50"
+      >
+        Ver infografía interactiva
+      </a>
     </div>
   </div>
 

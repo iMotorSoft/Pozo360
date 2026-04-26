@@ -1,0 +1,16 @@
+---
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import WorkflowInfographic from "../../../components/demo/vertice360-orquestador/WorkflowInfographic.svelte";
+
+const branding = {
+  displayName: "Vertice360 Infografia",
+  logoUrl: "/logo_v360.png",
+  primaryColor: "#0F766E",
+  secondaryColor: "#38BDF8",
+  accentColor: "#F59E0B",
+};
+---
+
+<BaseLayout brand={branding}>
+  <WorkflowInfographic client:load />
+</BaseLayout>

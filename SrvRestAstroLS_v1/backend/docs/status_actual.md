@@ -185,3 +185,117 @@
   - copiar `backend/modules/vertice360_orquestador_demo/services.py`
   - reiniciar el backend demo levantado con:
     - `VERTICE360_ENV=prod V360_ADMIN_TOKEN=v360-prod-token python ls_iMotorSoft_Srv01_demo.py`
+
+## Update 2026-04-24
+
+- Fecha/hora local: 2026-04-24 12:49:35 -0300
+- Se actualizo GitHub del proyecto:
+  - branch: `main`
+  - remoto: `origin git@github.com:iMotorSoft/Vertice360.git`
+  - commit: `dfd0e46`
+  - mensaje: `Update orquestador follow-up flow and docs`
+- Diferencia importante respecto de produccion:
+  - GitHub quedo actualizado.
+  - El server de produccion no fue sincronizado en esta sesion.
+  - No se hizo `rsync`, `scp`, `ssh`, restart backend ni reload de nginx contra produccion.
+  - No se detecto CI/CD en `.github`, por lo que el push a GitHub no implica deploy automatico.
+- Si se quiere que produccion tome el estado de `dfd0e46`, falta ejecutar el deploy manual del runbook:
+  - build local de `SrvRestAstroLS_v1/astro`
+  - sync de `astro/dist` al path frontend productivo
+  - sync/copia de `SrvRestAstroLS_v1/backend` al backend productivo
+  - restart del backend demo
+  - reload de nginx si aplica
+  - validacion de `/health`, `/version` y demo live
+- Cambios de codigo incluidos en `dfd0e46`:
+  - frontend Svelte del orquestador:
+    - `LeadDetailModal.svelte`
+    - `VisitProposalModal.svelte`
+    - `OrquestadorAdminPanel.svelte`
+  - backend:
+    - `modules/vertice360_orquestador_demo/services.py`
+  - tests backend relacionados con follow-up, runtime reset e ingest del orquestador
+- Ajuste aplicado antes del commit:
+  - la suite relevante fallaba en 2 casos porque consultas con feature de unidad como `balcon` eran absorbidas por `PROJECT_METRIC_VALUE`.
+  - se ajusto la prioridad del resolver semantico para que consultas de feature de unidad mantengan los intents esperados:
+    - `active_set_feature_filter`
+    - `project_unit_feature_search`
+- Validacion local previa al push:
+  - comando:
+    - `uv run pytest tests/test_orquestador_followup_evaluate.py tests/test_orquestador_runtime_reset.py tests/test_vertice360_orquestador_demo_ingest_copy.py tests/test_orquestador_followup_message_format.py`
+  - resultado:
+    - `138 passed`
+    - `20 skipped`
+    - `1 warning`
+- No parece requerir migracion DB nueva:
+  - el commit no agrego SQL de schema nuevo ni migracion obligatoria.
+  - las notas nuevas de DB/documentacion quedaron versionadas como documentacion.
+- Quedo fuera del commit por ser temporal de LibreOffice:
+  - `SrvRestAstroLS_v1/docs/.~lock.Auditoria_comparacion_modelo_v1.docx#`
+
+## Update 2026-04-26
+
+- Fecha/hora local aproximada: 2026-04-26 11:10 -0300.
+- Se actualizo produccion manualmente en `imotorsoft.com` para publicar el estado local de frontend y backend.
+- Frontend:
+  - build local ejecutado desde `SrvRestAstroLS_v1/astro`:
+    - `pnpm -C /media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/astro build`
+  - resultado:
+    - `16 page(s) built`
+    - `astro/dist/` regenerado correctamente
+  - sync a produccion con `rsync --delete`:
+    - origen: `/media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/astro/dist/`
+    - destino: `administrator@imotorsoft.com:/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/astro/dist/`
+  - validacion HTTP:
+    - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/?cliente=59168912007`
+    - respuesta: `HTTP/1.1 200 OK`
+    - `Last-Modified: Sun, 26 Apr 2026 13:44:20 GMT`
+- Backend:
+  - sync a produccion con `rsync --delete`:
+    - origen: `/media/issajar/DEVELOP/Projects/iMotorSoft/ai/dev/Vertice360/SrvRestAstroLS_v1/backend/`
+    - destino: `administrator@imotorsoft.com:/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend/`
+  - excludes usados:
+    - `.venv`
+    - `__pycache__`
+    - `.pytest_cache`
+    - `.ruff_cache`
+    - `tests`
+  - aviso no bloqueante del `rsync`:
+    - `cannot delete non-empty directory: modules/demo_ag_pozo360`
+    - causa probable: quedaron archivos excluidos por el sync, por ejemplo `__pycache__`
+    - el comando termino con codigo `0`
+- Reinicio backend:
+  - el proceso corre en `tmux`.
+  - inicialmente `tmux ls` mostraba una sesion llamada `0` con 5 ventanas.
+  - la ventana correcta era:
+    - indice `4`
+    - nombre `v360 api`
+    - path `/home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend`
+  - se renombro la sesion `tmux` de `0` a `v360 api`:
+    - ahora se puede entrar con `tmux attach -t "v360 api"`
+  - comando correcto de arranque dentro del pane:
+    - `cd /home/administrator/project/iMotorSoft/ai/Pozo360/SrvRestAstroLS_v1/backend`
+    - `source .venv/bin/activate`
+    - `VERTICE360_ENV=prod V360_ADMIN_TOKEN=v360-prod-token python  ls_iMotorSoft_Srv01_demo.py`
+  - incidente durante el reinicio:
+    - un primer intento quedo mal porque no se habia activado `.venv`
+    - el pane quedo en shell y la UI mostro `HTTP 502`, `Reconectando` y `No se pudo cargar el numero de WhatsApp demo`
+    - se corrigio levantando el server manualmente con `.venv` activado
+  - validacion de arranque observada en logs:
+    - `env=prod`
+    - `host=0.0.0.0 port=7062`
+    - `db_v360_configured=True db_v360_valid=True`
+    - `gupshup_enabled=True`
+    - `Uvicorn running on http://0.0.0.0:7062`
+    - requests a `/api/agui/stream` con `200 OK`
+- Validaciones funcionales post-reinicio:
+  - `GET /api/demo/vertice360-orquestador/bootstrap?cliente=59168912007`
+    - respondio OK
+    - devolvio `whatsapp_demo_phone="+4526325250"`
+    - devolvio proyectos y assets de marketing
+  - `GET /api/demo/vertice360-orquestador/dashboard?cliente=59168912007`
+    - respondio OK
+    - devolvio `tickets_total=1`
+  - la URL live quedo operativa:
+    - `https://demo.vertice360.imotorsoft.com/demo/vertice360-orquestador/?cliente=59168912007`
+- Nota de seguridad:
+  - no documentar contrasenas SSH ni tokens reales en archivos versionados.
