@@ -263,6 +263,7 @@ curl -sS -X POST "https://demo.vertice360.imotorsoft.com/api/demo/vertice360-orq
 - `level2` llega al supervisor `+59168912007`
 - si un ticket ya esta en `level2_sent`, puede devolver `no_action`
 - `provider_status="submitted"` significa ACK aceptado por Gupshup, no confirmacion de entrega al celular
+- Para avisos internos a advisor/supervisor, `submitted` no garantiza que WhatsApp lo entregue si el destinatario no tiene ventana activa u opt-in valido con la linea business.
 - `target_phone` es el destino real del follow-up interno
 - `target_matches_lead=true` indica que el follow-up interno fue al mismo numero del lead
 - el texto del follow-up muestra `lead_name_or_phone`, no el numero interno receptor
@@ -413,6 +414,13 @@ Notas:
 4. correr `followup/evaluate` general
 5. mostrar `sent_level1` en advisor y luego `sent_level2` en supervisor
 
+Nota importante para demo y produccion:
+
+- Si `level1` devuelve `provider_status="submitted"` pero el advisor no recibe el WhatsApp, verificar primero que el advisor haya iniciado conversacion con la linea business.
+- Workaround de demo: desde el celular del advisor enviar `Hola` al WhatsApp business, esperar la respuesta de Vera y reintentar `level1`.
+- Produccion robusta: usar templates aprobados de WhatsApp para notificaciones internas de `level1` y `level2`; no depender de texto libre dentro de la ventana de conversacion.
+- En la prueba del 2026-04-26, `+5491130946950` no recibia el `level1` hasta enviar `Hola`; luego el reintento de `level1` llego correctamente.
+
 ### Caso E - demo con solo 2 telefonos
 
 Si solo hay dos telefonos disponibles y la config productiva vigente es:
@@ -463,6 +471,8 @@ Secuencia validada el `2026-04-22`:
 - el texto de `level1` y `level2` describe al lead pendiente, no al receptor interno
 - para auditoria operativa, tomar como fuente de verdad `target_phone`, `target_matches_lead` y `provider_message_id`
 - `provider_status="submitted"` significa request aceptado por Gupshup; no reemplaza confirmacion manual de recepcion en el equipo
+- Para advisors/supervisors, texto libre por WhatsApp depende de ventana activa/opt-in; si se necesita entrega garantizada fuera de ventana, implementar templates aprobados en Gupshup/WhatsApp.
+- Sintoma conocido: Gupshup responde HTTP `202` y el backend registra `submitted`, pero el advisor no recibe el mensaje hasta iniciar conversacion con la linea business.
 - `admin/reset_phone` no reemplaza `reset_runtime_phone`
 - `visit_followup_config` queda intacta incluso despues de reset runtime
 - `followup/config/set` valida telefonos requeridos cuando `enabled=true`

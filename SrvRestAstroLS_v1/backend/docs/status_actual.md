@@ -356,3 +356,39 @@
 - Importante:
   - la version PNG/poster es una pieza aislada; no toca la home, la infografia interactiva, el backend ni la demo live.
   - los archivos del PNG/poster aun no fueron commiteados ni subidos a GitHub en esta sesion.
+
+## Update 2026-04-26 3
+
+- Se reviso en produccion un caso real de follow-up donde `level1` figuraba como enviado pero el advisor no recibia el WhatsApp.
+- Ticket validado:
+  - `8ac33688-d6e5-408b-9992-ec1723c01f86`
+  - lead/demo: `+59168912007`
+  - proyecto: `GDR_3760_SAAVEDRA`
+- Config productiva restaurada para demo con dos telefonos:
+  - `cliente=prod-celulares-check-20260324`
+  - `advisor_phone=+5491130946950`
+  - `supervisor_phone=+59168912007`
+  - `first_delay_seconds=10`
+  - `second_delay_seconds=15`
+- Se confirmo en DB/eventos que:
+  - `level1` se registro con `target_phone=+5491130946950`, `provider_status=submitted`, `target_matches_lead=false`
+  - `level2` se registro con `target_phone=+59168912007`, `provider_status=submitted`, `target_matches_lead=true`
+- Hallazgo operativo:
+  - `provider_status=submitted` significa que Gupshup acepto el request/ACK.
+  - No significa entrega final en WhatsApp.
+  - Para destinatarios internos como advisor/supervisor, el texto libre puede no llegar si el numero no tiene ventana activa u opt-in valido con la linea business.
+- Reproduccion y resolucion observada:
+  - `+5491130946950` no recibia `level1` aunque el backend registraba `submitted`.
+  - El advisor envio `Hola` al WhatsApp business y recibio el onboarding de Vera.
+  - Se reseteo solo el estado del ciclo de follow-up y se reintento `level1`.
+  - El reintento llego correctamente al advisor.
+  - Luego se evaluo de nuevo y `level2` escalo correctamente al supervisor/demo `+59168912007`.
+- Accion recomendada para produccion:
+  - crear templates aprobados de WhatsApp para notificaciones internas de `level1` y `level2`.
+  - usar templates para avisos a advisor/supervisor cuando no haya ventana activa.
+  - mantener `submitted` como ACK tecnico, no como confirmacion de lectura/entrega.
+- Accion recomendada para demo hasta implementar templates:
+  - antes de mostrar escalamiento, verificar que el advisor haya enviado `Hola` al WhatsApp business ese dia o recientemente.
+  - si no llega `level1`, pedir al advisor que mande `Hola`, resetear/reintentar solo el ciclo de follow-up y volver a evaluar.
+- Documentacion operativa actualizada:
+  - `docs/demo_operativa_vertice360.md`

@@ -38,7 +38,9 @@ def test_gupshup_webhook_billing_event_is_ignored(client, monkeypatch, event_rec
     assert calls == {"ai": 0, "workflow": 0}
 
 
-def test_gupshup_webhook_message_event_status_is_ignored(client, monkeypatch, event_recorder) -> None:  # noqa: ARG001
+def test_gupshup_webhook_message_event_status_is_published_without_inbound_route(
+    client, monkeypatch, event_recorder
+) -> None:
     calls = {"ai": 0, "workflow": 0}
 
     async def fake_ai(*args, **kwargs):  # noqa: ANN002, ANN003
@@ -68,8 +70,14 @@ def test_gupshup_webhook_message_event_status_is_ignored(client, monkeypatch, ev
     )
 
     assert response.status_code == 201
-    assert response.json().get("ok") is True
+    assert response.json() == {"ok": True, "status_updates": 1}
     assert calls == {"ai": 0, "workflow": 0}
+    assert len(event_recorder) == 1
+    event = event_recorder[0]
+    assert event["name"] == "messaging.status"
+    assert event["correlationId"] == "status-1"
+    assert event["value"]["message_id"] == "status-1"
+    assert event["value"]["status"] == "delivered"
 
 
 def test_gupshup_webhook_inbound_text_routes_to_orquestador_once(client, monkeypatch, event_recorder) -> None:  # noqa: ARG001

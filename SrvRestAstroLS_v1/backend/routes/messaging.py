@@ -42,6 +42,24 @@ from backend.modules.vertice360_workflow_demo import store as workflow_store
 logger = logging.getLogger(__name__)
 
 
+async def _publish_gupshup_status_updates(status_updates: list[Any]) -> None:
+    for status in status_updates:
+        value = _compact_value(
+            {
+                "provider": status.provider,
+                "service": status.service,
+                "message_id": status.message_id,
+                "status": status.status,
+                "timestamp": status.timestamp,
+                "raw": status.raw,
+            }
+        )
+        await broadcaster.publish(
+            "messaging.status",
+            _custom_event("messaging.status", value, status.message_id),
+        )
+
+
 class MessagingController(Controller):
     path = "/api/v1/messaging"
     tags = ["Messaging"]
@@ -630,12 +648,19 @@ class GupshupWhatsAppWebhookController(Controller):
             event_type or "-",
             gupshup_app or "-",
         )
+        status_updates = gupshup_parse_status(payload)
         if event_type != "message":
+            if status_updates:
+                await _publish_gupshup_status_updates(status_updates)
+                return {"ok": True, "status_updates": len(status_updates)}
             logger.info("GUPSHUP_WEBHOOK ignored event_type=%s reason=non_inbound", event_type or "-")
             return {"ok": True}
 
         inbound_text = _extract_gupshup_inbound_text(payload)
         if not inbound_text:
+            if status_updates:
+                await _publish_gupshup_status_updates(status_updates)
+                return {"ok": True, "status_updates": len(status_updates)}
             payload_type = ""
             if isinstance(payload.get("payload"), dict):
                 payload_type = str(payload["payload"].get("type") or "").strip().lower()
@@ -647,7 +672,6 @@ class GupshupWhatsAppWebhookController(Controller):
             return {"ok": True}
 
         inbound_messages = gupshup_parse_inbound(payload)
-        status_updates = gupshup_parse_status(payload)
 
         vera_send_ok_all = True
         routed_message_count = 0
@@ -743,21 +767,7 @@ class GupshupWhatsAppWebhookController(Controller):
                 _custom_event("messaging.inbound.raw", value, message_id),
             )
 
-        for status in status_updates:
-            value = _compact_value(
-                {
-                    "provider": status.provider,
-                    "service": status.service,
-                    "message_id": status.message_id,
-                    "status": status.status,
-                    "timestamp": status.timestamp,
-                    "raw": status.raw,
-                }
-            )
-            await broadcaster.publish(
-                "messaging.status",
-                _custom_event("messaging.status", value, status.message_id),
-            )
+        await _publish_gupshup_status_updates(status_updates)
 
         if routed_message_count == 0:
             return {"ok": True}
