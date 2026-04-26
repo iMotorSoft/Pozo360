@@ -71,9 +71,21 @@
   const getContext = () =>
     contexts.find((context) => context.id === activeContextId) ?? contexts[0];
 
+  const getContextIndex = () => {
+    const index = contexts.findIndex((context) => context.id === activeContextId);
+    return index >= 0 ? index : 0;
+  };
+
+  const advanceContext = () => {
+    const nextIndex = (getContextIndex() + 1) % contexts.length;
+    activeContextId = contexts[nextIndex].id;
+    activeStep = 0;
+  };
+
   const selectContext = (id) => {
     activeContextId = id;
     activeStep = 0;
+    paused = false;
   };
 
   const selectStep = (index) => {
@@ -83,8 +95,12 @@
 
   onMount(() => {
     const intervalId = window.setInterval(() => {
-      if (!paused) {
-        activeStep = (activeStep + 1) % steps.length;
+      if (paused) return;
+
+      if (activeStep >= steps.length - 1) {
+        advanceContext();
+      } else {
+        activeStep += 1;
       }
     }, 1600);
 
@@ -107,20 +123,38 @@
       </p>
     </div>
 
-    <div class="context-panel" aria-label="Contexto de ejemplo">
-      <p class="panel-kicker">Caso de uso</p>
-      <div class="context-switcher">
-        {#each contexts as context}
-          <button
-            type="button"
-            class:active={activeContextId === context.id}
-            onclick={() => selectContext(context.id)}
-          >
-            {context.label}
-          </button>
-        {/each}
+    <div class="context-stack">
+      <button
+        type="button"
+        class="play-toggle"
+        class:paused
+        onclick={() => (paused = !paused)}
+        aria-label={paused ? "Reanudar animacion" : "Pausar animacion"}
+      >
+        <span class="toggle-icon" aria-hidden="true">
+          {#if paused}
+            Play
+          {:else}
+            Pausa
+          {/if}
+        </span>
+      </button>
+
+      <div class="context-panel" aria-label="Contexto de ejemplo">
+        <p class="panel-kicker">Caso de uso</p>
+        <div class="context-switcher">
+          {#each contexts as context}
+            <button
+              type="button"
+              class:active={activeContextId === context.id}
+              onclick={() => selectContext(context.id)}
+            >
+              {context.label}
+            </button>
+          {/each}
+        </div>
+        <p class="context-outcome">{getContext().outcome}</p>
       </div>
-      <p class="context-outcome">{getContext().outcome}</p>
     </div>
   </div>
 
@@ -214,6 +248,7 @@
 <style>
   .workflow-shell {
     color: #172033;
+    margin-top: -18px;
   }
 
   .hero-grid {
@@ -266,6 +301,41 @@
 
   .context-panel {
     padding: 18px;
+  }
+
+  .context-stack {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+  }
+
+  .context-stack .context-panel {
+    width: 100%;
+  }
+
+  .play-toggle {
+    min-height: 30px;
+    border: 1px solid #0f766e;
+    border-radius: 999px;
+    background: #0f766e;
+    color: #ffffff;
+    padding: 6px 12px;
+    font-size: 0.76rem;
+    font-weight: 900;
+    cursor: pointer;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease,
+      transform 0.2s ease;
+  }
+
+  .play-toggle.paused {
+    background: #ffffff;
+    color: #0f766e;
+  }
+
+  .play-toggle:hover {
+    transform: translateY(-1px);
   }
 
   .context-switcher {
